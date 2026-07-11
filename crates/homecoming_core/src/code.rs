@@ -1,6 +1,6 @@
 //! `Code`: the leaf capability, capture in place of generation.
 
-use crate::Fragment;
+use crate::{Fragment, Ir};
 
 /// A value that can give back the exact source that produced it, in place
 /// of the value itself.
@@ -10,8 +10,12 @@ use crate::Fragment;
 /// capture real source, never a plausible-looking reconstruction — see
 /// `HOMECOMING_PLAN.md`'s "Capture and replay, not generation".
 pub trait Code {
+    /// The concrete [`Fragment`] representation this implementor's source
+    /// is captured as.
+    type Fragment: Fragment;
+
     /// The source that produced this value.
-    fn code(&self) -> Fragment;
+    fn code(&self) -> Self::Fragment;
 }
 
 fn lit_expr(lit: syn::Lit) -> syn::Expr {
@@ -24,9 +28,11 @@ fn lit_expr(lit: syn::Lit) -> syn::Expr {
 macro_rules! impl_code_integer {
     ($ty:ty) => {
         impl Code for $ty {
-            fn code(&self) -> Fragment {
+            type Fragment = Ir;
+
+            fn code(&self) -> Ir {
                 let lit = syn::LitInt::new(&self.to_string(), proc_macro2::Span::call_site());
-                Fragment::leaf(lit_expr(syn::Lit::Int(lit)))
+                Ir::leaf(lit_expr(syn::Lit::Int(lit)))
             }
         }
     };
@@ -46,15 +52,19 @@ impl_code_integer!(u128);
 impl_code_integer!(usize);
 
 impl Code for bool {
-    fn code(&self) -> Fragment {
+    type Fragment = Ir;
+
+    fn code(&self) -> Ir {
         let lit = syn::LitBool::new(*self, proc_macro2::Span::call_site());
-        Fragment::leaf(lit_expr(syn::Lit::Bool(lit)))
+        Ir::leaf(lit_expr(syn::Lit::Bool(lit)))
     }
 }
 
 impl Code for char {
-    fn code(&self) -> Fragment {
+    type Fragment = Ir;
+
+    fn code(&self) -> Ir {
         let lit = syn::LitChar::new(*self, proc_macro2::Span::call_site());
-        Fragment::leaf(lit_expr(syn::Lit::Char(lit)))
+        Ir::leaf(lit_expr(syn::Lit::Char(lit)))
     }
 }

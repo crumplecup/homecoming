@@ -11,44 +11,50 @@ use crate::Fragment;
 /// up. As a trait, new localities are just new implementors — see
 /// `HOMECOMING_PLAN.md`'s "`Code`, `Scope`, `Locality`" for the design
 /// rationale, including why `Omit` fell out of this shape for free.
-pub trait Locality {
+///
+/// Generic over the concrete [`Fragment`] type, since `Locality` has to
+/// work for whatever representation the paired `Code`/`Scope` implementor
+/// uses, not just this crate's own [`crate::Ir`].
+pub trait Locality<F: Fragment> {
     /// Render this dependency's contribution, or `None` if it contributes
     /// nothing to the scoped result at all.
-    fn contribute(&self, dependency: &Fragment) -> Option<Fragment>;
+    fn contribute(&self, dependency: &F) -> Option<F>;
 }
 
 /// Reproduce a dependency's fragment in full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Inline;
 
-impl Locality for Inline {
-    fn contribute(&self, dependency: &Fragment) -> Option<Fragment> {
+impl<F: Fragment> Locality<F> for Inline {
+    fn contribute(&self, dependency: &F) -> Option<F> {
         Some(dependency.clone())
     }
 }
 
-/// Name a dependency by a path instead of reproducing its definition.
+/// Name a dependency by a caller-supplied replacement fragment instead of
+/// reproducing its definition.
+///
+/// The replacement is supplied already built, rather than `Reference`
+/// building it from a path itself: `Fragment` carries no construction
+/// capability (deliberately — the interface only promises `ToTokens` +
+/// `Clone`), so whoever holds a concrete `F` and knows how to build an
+/// `F`-shaped reference has to do that construction, not `Locality`.
 #[derive(Debug, Clone)]
-pub struct Reference {
-    path: syn::Path,
+pub struct Reference<F> {
+    replacement: F,
 }
 
-impl Reference {
-    /// Reference a dependency by the given path, without reproducing its
-    /// definition.
-    pub fn new(path: syn::Path) -> Self {
-        Self { path }
+impl<F> Reference<F> {
+    /// Reference a dependency by the given replacement fragment, without
+    /// reproducing its definition.
+    pub fn new(replacement: F) -> Self {
+        Self { replacement }
     }
 }
 
-impl Locality for Reference {
-    fn contribute(&self, _dependency: &Fragment) -> Option<Fragment> {
-        let expr = syn::Expr::Path(syn::ExprPath {
-            attrs: Vec::new(),
-            qself: None,
-            path: self.path.clone(),
-        });
-        Some(Fragment::leaf(expr))
+impl<F: Fragment> Locality<F> for Reference<F> {
+    fn contribute(&self, _dependency: &F) -> Option<F> {
+        Some(self.replacement.clone())
     }
 }
 
@@ -56,8 +62,8 @@ impl Locality for Reference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Omit;
 
-impl Locality for Omit {
-    fn contribute(&self, _dependency: &Fragment) -> Option<Fragment> {
+impl<F: Fragment> Locality<F> for Omit {
+    fn contribute(&self, _dependency: &F) -> Option<F> {
         None
     }
 }

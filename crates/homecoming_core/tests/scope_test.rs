@@ -1,4 +1,4 @@
-use homecoming_core::{Code, Fragment, Inline, Locality, Scope};
+use homecoming_core::{Code, Inline, Ir, Locality, Scope};
 use quote::ToTokens;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,7 +25,9 @@ fn variant_path(variant: &str) -> syn::Path {
 }
 
 impl Code for Stoplight {
-    fn code(&self) -> Fragment {
+    type Fragment = Ir;
+
+    fn code(&self) -> Ir {
         let variant = match self {
             Stoplight::Green => "Green",
             Stoplight::Yellow => "Yellow",
@@ -36,7 +38,7 @@ impl Code for Stoplight {
             qself: None,
             path: variant_path(variant),
         });
-        Fragment::leaf(expr)
+        Ir::leaf(expr)
     }
 }
 
@@ -48,14 +50,16 @@ struct Transition {
 }
 
 impl Code for Transition {
-    fn code(&self) -> Fragment {
+    type Fragment = Ir;
+
+    fn code(&self) -> Ir {
         let elems = [
             self.from.code().expr().clone(),
             self.to.code().expr().clone(),
         ]
         .into_iter()
         .collect();
-        Fragment::leaf(syn::Expr::Tuple(syn::ExprTuple {
+        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
             attrs: Vec::new(),
             paren_token: Default::default(),
             elems,
@@ -64,12 +68,35 @@ impl Code for Transition {
 }
 
 impl Scope for Transition {
-    fn boundary(&self) -> impl Iterator<Item = (Fragment, Box<dyn Locality>)> {
+    fn boundary(&self) -> impl Iterator<Item = (Ir, Box<dyn Locality<Ir>>)> {
         vec![
-            (self.from.code(), Box::new(Inline) as Box<dyn Locality>),
-            (self.to.code(), Box::new(Inline) as Box<dyn Locality>),
+            (self.from.code(), Box::new(Inline) as Box<dyn Locality<Ir>>),
+            (self.to.code(), Box::new(Inline) as Box<dyn Locality<Ir>>),
         ]
         .into_iter()
+    }
+
+    fn scope(&self) -> Ir {
+        // No lateralizing composition trait exists yet (see
+        // HOMECOMING_PLAN.md Phase 5), so this hand-writes the same
+        // sequence-into-a-block shape the old generic default used,
+        // specific to Ir since Fragment carries no composition capability.
+        let mut stmts: Vec<syn::Stmt> = self
+            .boundary()
+            .filter_map(|(dependency, locality)| locality.contribute(&dependency))
+            .map(|fragment| syn::Stmt::Expr(fragment.expr().clone(), Some(Default::default())))
+            .collect();
+        stmts.push(syn::Stmt::Expr(self.code().expr().clone(), None));
+
+        let block = syn::Block {
+            brace_token: Default::default(),
+            stmts,
+        };
+        Ir::leaf(syn::Expr::Block(syn::ExprBlock {
+            attrs: Vec::new(),
+            label: None,
+            block,
+        }))
     }
 }
 
@@ -118,15 +145,21 @@ fn reference_locality_names_without_reproducing() -> Result<(), Box<dyn std::err
     use homecoming_core::Reference;
 
     let dependency = Stoplight::Red.code();
-    let reference = Reference::new(variant_path("Green"));
+    let replacement = Ir::leaf(syn::Expr::Path(syn::ExprPath {
+        attrs: Vec::new(),
+        qself: None,
+        path: variant_path("Green"),
+    }));
+    let reference = Reference::new(replacement);
     let contribution = reference
         .contribute(&dependency)
         .ok_or("Reference must always contribute a name fragment")?;
     let tokens = contribution.to_token_stream();
     let rendered = tokens.to_string();
 
-    // References by the given path, not by reproducing the dependency it
-    // was handed — the whole point of Reference vs Inline.
+    // References by the replacement it was constructed with, not by
+    // reproducing the dependency it was handed — the whole point of
+    // Reference vs Inline.
     assert!(rendered.contains("Green"), "rendered: {rendered}");
     assert!(!rendered.contains("Red"), "rendered: {rendered}");
     let _reparsed: syn::Expr = syn::parse2(tokens)?;
