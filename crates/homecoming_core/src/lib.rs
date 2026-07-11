@@ -13,3 +13,13 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+mod code;
+mod fragment;
+mod locality;
+mod scope;
+
+pub use code::Code;
+pub use fragment::Fragment;
+pub use locality::{Inline, Locality, Omit, Reference};
+pub use scope::Scope;

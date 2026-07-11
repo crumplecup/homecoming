@@ -548,17 +548,20 @@ claim, verified two ways that do different jobs:
 - [x] Settle the naming split: `Code` is the trait, `Homecoming` is the
   working name for the derive macro (not finalized).
 
-### Phase 3: `Fragment` and minimal `Code` leaves
+### Phase 3: `Fragment` and minimal `Code` leaves — done, first pass
 
-- [ ] Define `Fragment` as a `petgraph` graph with `syn`-typed node payloads
+- [x] Define `Fragment` as a `petgraph` graph with `syn`-typed node payloads
   (leaf nodes wrap `syn::Expr`; composite nodes carry a shape tag plus child
-  edges).
-- [ ] Implement `Code` for just enough values to build the Phase 4 success
-  case (e.g. a small enum's variants) — not a broad std-lib sweep; that is
-  deferred until something concretely needs it.
-- [ ] Write the simple-form round-trip check for every leaf `Code` impl,
+  edges). Currently only the leaf case (`Fragment::leaf`) is implemented —
+  a single-node graph. Composite nodes are Phase 5 work.
+- [x] Implement `Code` for enough std primitives to exercise the design
+  (`bool`, `char`, all integer types) — literal construction via `syn::Lit`
+  built directly from the value, not string-parsing, so there is no
+  fallible path and no `.unwrap()`/`.expect()` anywhere in the impl.
+- [x] Write the simple-form round-trip check for every leaf `Code` impl,
   and confirm it actually catches a deliberately fabricated fragment that
-  does not reconstruct its claimed value.
+  does not reconstruct its claimed value — `tests/code_test.rs`'s
+  `fabricated_fragment_fails_the_round_trip` does exactly this and passes.
 
 ### Phase 4: Core-tier shaving demo (no `amenable` involved)
 
@@ -567,15 +570,33 @@ The core tier's success case: prove structural shaving — `Scope`,
 by hand, on a type with no `amenable` bound at all, before the bridge
 crate exists.
 
-- [ ] Implement `Inline`, `Reference`, and `Omit` as `Locality` and confirm
-  the round-trip obligation holds through `scope()`, not just `code()`.
-- [ ] Hand-implement `Code`/`Scope` directly for a stoplight-shaped enum
-  (three states, three hand-written transition methods) with no
-  `StateMachine`/`Exchange`-style trait bound at all — just `Scope`'s own
-  required methods, to confirm the core tier stands on its own.
+- [x] Implement `Inline`, `Reference`, and `Omit` as `Locality`. Two real
+  refinements surfaced only once this was actually written, not while it
+  was still a sketch: `Locality::contribute` takes `&Fragment`, not
+  `&dyn Code` as originally sketched (avoids needing `Code` to be
+  object-safe for no real benefit); it returns `Option<Fragment>`, not a
+  bare `Fragment` (`Omit` has nothing honest to return otherwise — `None`
+  is the correct answer, not an empty/unit fragment standing in for
+  "nothing"). `Reference` also turned out to need to carry its own
+  `syn::Path`, supplied by the caller — nothing in `&Fragment` alone
+  identifies what name to reference by.
+- [x] Confirm the round-trip obligation holds through `scope()`, not just
+  `code()` — `tests/scope_test.rs`'s `transition_scope_includes_both_
+  boundary_states` re-parses `scope()`'s output as `syn::Expr` and confirms
+  it actually compiles as valid Rust, not just that it looks plausible.
+- [x] Hand-implement `Code`/`Scope` directly for a stoplight-shaped enum
+  (three states) and a `Transition` type with no `StateMachine`/
+  `Exchange`-style trait bound at all — just `Scope`'s own required
+  methods, confirming the core tier stands on its own. `scope()`'s current
+  default sequences boundary contributions into a `syn::Block`, which is a
+  real, if simple, composition (see Phase 5) — not the final answer to how
+  contributions ought to combine, but honest and round-trip-checkable as
+  far as it goes.
 - [ ] Shave the stoplight down to a smaller valid result (e.g. two states
   and the one relation between them) and confirm the result is edge-closed,
-  rooted, and compiles standalone.
+  rooted, and compiles standalone. Not yet done — the current test exercises
+  `Inline` universally; `Omit`-driven shaving of a multi-state example is
+  still open.
 - [ ] Model a calculator by hand and confirm that isolating one calculation
   is exactly extracting the subgraph along one walked path — no separate
   tracking mechanism required.
