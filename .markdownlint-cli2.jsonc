@@ -1,0 +1,26 @@
+// markdownlint-cli2 configuration
+{
+  "config": {
+    // Disable line length check - we have long URLs and code examples
+    "MD013": false,
+
+    // Allow inline HTML - needed for generic type parameters like <T>
+    "MD033": false,
+
+    // Tables use compact |---|---| separators throughout the codebase — this is the project style
+    "MD060": false,
+
+    // CHANGELOG.md legitimately repeats heading names (Added, Fixed, etc.) across releases
+    "MD024": false
+  },
+
+  "globs": [
+    "**/*.md"
+  ],
+
+  "ignores": [
+    "node_modules",
+    "target",
+    ".git"
+  ]
+}

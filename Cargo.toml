@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "crates/homecoming",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/crumplecup/homecoming"
+authors = ["Erik Rose <erik.w.rose@gmail.com>"]
+homepage = "https://github.com/crumplecup/homecoming"
+documentation = "https://docs.rs/homecoming"
+
+[workspace.dependencies]
+homecoming = { path = "crates/homecoming", version = "0.1.0" }

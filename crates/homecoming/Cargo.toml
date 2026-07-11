@@ -1,0 +1,19 @@
+[package]
+name = "homecoming"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+description = "High-fidelity capture and replay of Rust source code fragments"
+keywords = ["codegen", "syn", "petgraph", "proc-macro", "agent"]
+categories = ["development-tools", "rust-patterns"]
+
+[dependencies]
+petgraph = "0.8"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
