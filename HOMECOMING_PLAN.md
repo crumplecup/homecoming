@@ -310,12 +310,84 @@ payoff in conversation before it was designed as a signature; resolving it
 concretely is bridge-crate work, not core-crate work, and comes after the
 core tier is implemented and compiling (see Phased Implementation Plan).
 
+## `Extent`: the user's grammar for what's worth isolating
+
+`Scope` and `Extent` split the same distinction programming language theory
+already draws between *scope* and *extent*: scope is the static, lexical
+question (what does this structure look like), extent is the dynamic,
+temporal question (when is a recording live). `Scope` answers what;
+`Extent` answers when — and, more importantly, *which* — by giving the
+user a grammar for declaring which methods and types are meaningful units
+worth being able to isolate at all.
+
+The guiding intuition is still a tracing span, taken further: `tracing`
+doesn't just isolate log output structurally, it has explicit lifecycle
+methods — a span starts, runs, and stops, RAII-shaped so a guard dropping
+marks the end rather than trusting every caller to remember. `Extent` is
+the same shape, applied to code capture instead of log capture:
+
+```rust
+pub trait Extent {
+    type Fragment: Fragment;
+    type Guard;
+
+    /// Begin recording; recording ends when the returned guard drops.
+    fn start(&mut self, name: &str) -> Self::Guard;
+}
+```
+
+Once a guard drops, the result is something that implements `Scope` —
+queried the same way any other `Scope` implementor is. `Extent` owns only
+the temporal question (when did recording happen, and around what);
+`Scope` owns only the structural question (what does the recorded result
+look like). Same separation of concerns `Code`/`Locality`/`Scope` already
+have from each other, not a new one invented for this trait specifically.
+
+### Why this matters more than a mechanism: it's the user's actual API
+
+The point of `Extent` isn't just "a well-shaped way to record a trace." It
+is how a user expresses which cut points in *their own program* are
+meaningful, in their own vocabulary, without hand-writing `Code`/`Scope`
+impls at all. The derive-driven build order (Phase 8, not yet started) is
+expected to land here specifically: `#[derive(Homecoming)]` on a type, plus
+an attribute on the methods the user considers meaningful units, inserts
+`Extent::start()`/guard calls around those methods automatically — the
+same way `#[instrument]` in `tracing` wraps a function body with span
+enter/exit. A method the user does *not* annotate never becomes its own
+recordable unit; it is just plumbing, absorbed into whatever encloses it,
+invisible to the isolation machinery entirely.
+
+That reframes something about `Selection` (above) worth stating plainly:
+`Extent`-annotation is what creates the *menu* `Selection` later chooses
+from, not the other way around. Revisit the calculator: annotating
+`divide`, `multiply`, `add`, and `subtract` with an extent attribute is
+what makes "a calculator with just `+ - * /`" possible to ask for at all —
+those four methods become individually isolatable units because the user
+declared them meaningful. If the calculator also has `clear`,
+`memory_store`, or display-formatting methods that were never annotated,
+they are never on the menu — not omitted by a `Selection` policy at
+shave-time, simply never candidates in the first place. `Selection` then
+picks among whatever the user's own `Extent` annotations made available —
+"just `+` and `-`," say, out of all four. The buffet metaphor gets a
+missing piece: `Extent` is what decides which dishes exist on the table at
+all; `Selection` is what ends up on a given plate.
+
+`homecoming` is expected to use the same grammar for its own work, not a
+special internal-only mechanism — its own std-lib and example `Code`/
+`Scope` impls should eventually be expressible through `Extent`
+annotations too, once the derive exists, rather than the hand-written
+`impl Scope` this crate currently relies on being a permanently separate
+path from what user code does.
+
 ## Shifting scope: `Selection`, `Source`, and `Binding`
 
 Core-tier concept, not specific to either tier's shaving mechanism — any
 `Scope` implementor's `boundary()` entries can be filtered by `Selection`
 and value-bound by `Source`, whether the implementor is a bare `Code` value
-or a `StateMachine`/`Exchange`-bound bridge-tier type.
+or a `StateMachine`/`Exchange`-bound bridge-tier type. Which items are
+*available* to select among is `Extent`'s job (above), not `Selection`'s —
+`Selection` only ever operates over what an `Extent` annotation already
+made isolatable.
 
 Shaving a value down to a smaller one turned out not to be one decision
 but two independent ones, and conflating them was the mistake in an
@@ -520,6 +592,14 @@ claim, verified two ways that do different jobs:
   locality kinds) — describe the capability needed, let implementors supply
   the cases, the same discipline `amenable`'s `Provenance` redesign
   established first.
+- No treating this as a bag of independent traits that happen to share a
+  crate — `Code`, `Locality`, `Scope`, and `Extent` are a family, and their
+  members should constrain each other through associated types the way
+  `Iterator`/`IntoIterator` and `amenable`'s `Evidence`/`Witness` already
+  do, not merely be independently satisfiable. `Fragment` was a concrete
+  type in an earlier pass specifically because this wasn't being honored —
+  `Code`, `Locality<F>`, and `Scope` couldn't actually express their real
+  relationship to a type that wasn't itself an interface.
 - No targeting arbitrary, unstructured Rust programs — the design scopes
   deliberately to programs with a `Scope` implementation (core tier) or a
   state-machine shape (bridge tier), where isolation has a precise,
@@ -529,6 +609,11 @@ claim, verified two ways that do different jobs:
   mode) — `Selection` and `Source` are independent, composable pieces, and
   any combination of them is a valid configuration, not just the two that
   motivated the design.
+- No conflating "which units can be isolated at all" with "which of those
+  units are chosen for a given shaved result" — `Extent` (author-declared,
+  what's on the menu) and `Selection` (shave-time policy, what's on a
+  given plate) are different questions answered at different times, not
+  one mechanism wearing two names.
 
 ## Phased Implementation Plan
 
@@ -587,8 +672,12 @@ crate exists.
 - [x] Hand-implement `Code`/`Scope` directly for a stoplight-shaped enum
   (three states) and a `Transition` type with no `StateMachine`/
   `Exchange`-style trait bound at all — just `Scope`'s own required
-  methods, confirming the core tier stands on its own. `scope()`'s current
-  default sequences boundary contributions into a `syn::Block`, which is a
+  methods, confirming the core tier stands on its own. A further
+  refinement surfaced here too: `Fragment` had to become a trait, not a
+  concrete type (see "`Code`, `Scope`, `Locality`" above) — a properly
+  abstract `Fragment` carries no composition capability, so `scope()` has
+  no default body at all now. `Transition`'s `scope()` hand-sequences its
+  boundary contributions into a `syn::Block`, specific to `Ir`, which is a
   real, if simple, composition (see Phase 5) — not the final answer to how
   contributions ought to combine, but honest and round-trip-checkable as
   far as it goes.
@@ -610,6 +699,13 @@ crate exists.
   = an arithmetic filter, `Source` = always `None`) — from the same two
   composable pieces, with no mode-specific code written for either.
 - [ ] Decide how `scope()` and `scope_with()` relate.
+- [ ] Define `Extent`, hand-implement it for the calculator example
+  (`start()` called around `divide`/`multiply`/`add`/`subtract`, by hand,
+  no derive yet), and confirm the recorded result implements `Scope` and
+  is queryable the same way any other `Scope` implementor is.
+- [ ] Confirm methods never wrapped in an `Extent::start()`/guard pair are
+  genuinely invisible to `Selection` — not merely excluded by policy, but
+  never candidates at all.
 
 ### Phase 5: Composition
 
@@ -650,16 +746,24 @@ the bridge crate builds directly on `Scope`/`Locality`/`Selection`/
 ### Phase 8: The derive macro
 
 Not started until Phases 3–6 have produced enough hand-written `impl Code`/
-`impl Scope` examples, core and bridge tier both, to extract a reliable
-pattern from — designing the macro before the representation it targets is
-proven repeats the mistake that motivated this crate's own existence.
+`impl Scope`/`impl Extent` examples, core and bridge tier both, to extract
+a reliable pattern from — designing the macro before the representation it
+targets is proven repeats the mistake that motivated this crate's own
+existence.
 
 - [ ] Extract the repeatable shape of the hand-written examples into macro
   logic.
 - [ ] Decide the derive macro's final name.
+- [ ] Decide the attribute users apply to individual methods/types to mark
+  them as meaningful `Extent` units — this is expected to be the primary
+  user-facing API surface, the same role `#[instrument]` plays for
+  `tracing`, not an internal implementation detail.
 - [ ] Confirm `#[derive(..)]`-generated impls satisfy the same round-trip
   obligation as hand-written ones, with no special exemption for
   macro-generated code.
+- [ ] Confirm `homecoming`'s own hand-written examples can be re-expressed
+  through the derive and `Extent` attributes, not left as a permanently
+  separate hand-written path from what user code does.
 
 ## Open Questions
 
@@ -697,6 +801,16 @@ proven repeats the mistake that motivated this crate's own existence.
 - Does `Selection` need the same `dyn`-dispatch treatment `Locality` does,
   for the same reason (heterogeneous policies), or can it stay a single
   concrete type per `scope_with()` call?
+- What does `Extent::Guard` do on drop, concretely — does dropping it
+  finalize a `Scope`-implementing value immediately, or does it register
+  the recorded span somewhere for later retrieval? Where does the recorded
+  data actually live between `start()` and the guard dropping?
+- What attribute grammar does the derive use to mark a method as an
+  `Extent` unit — a bare `#[extent]`, something carrying a name/config
+  like `#[instrument]` does, or something else?
+- Can `Extent` recordings nest (an extent-marked method calling another
+  extent-marked method), and if so, does the inner one become part of the
+  outer one's boundary automatically, mirroring how `tracing` spans nest?
 
 ## Success Condition
 
@@ -712,4 +826,8 @@ general capability-filtered program, is reachable by composing `Selection`
 and `Source` rather than by choosing among a fixed set of modes. And when
 `amenable`'s proof-bearing traits can lean on this machinery to prove, not
 just assert, that the code a proof ran over is the code that actually
-ships.
+ships. And when a user can declare which parts of their own program are
+worth isolating in their own vocabulary — `Extent` attributes on their own
+methods and types — without hand-writing `Code`/`Scope` impls, the same
+way `#[instrument]` lets a `tracing` user opt into span-shaped observation
+without hand-writing span management.
