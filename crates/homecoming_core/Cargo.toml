@@ -1,5 +1,5 @@
 [package]
-name = "homecoming"
+name = "homecoming_core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,9 +8,12 @@ authors.workspace = true
 homepage.workspace = true
 documentation.workspace = true
 
-description = "High-fidelity capture, isolation, and replay of Rust source code"
+description = "Code: high-fidelity capture, isolation, and replay of Rust source"
 keywords = ["codegen", "syn", "petgraph", "proc-macro", "agent"]
 categories = ["development-tools", "rust-patterns"]
 
 [dependencies]
-homecoming_core = { workspace = true }
+petgraph = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

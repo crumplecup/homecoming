@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "crates/homecoming",
+  "crates/homecoming_core",
+  "crates/homecoming_derive",
 ]
 resolver = "2"
 
@@ -15,3 +17,9 @@ documentation = "https://docs.rs/homecoming"
 
 [workspace.dependencies]
 homecoming = { path = "crates/homecoming", version = "0.1.0" }
+homecoming_core = { path = "crates/homecoming_core", version = "0.1.0" }
+homecoming_derive = { path = "crates/homecoming_derive", version = "0.1.0" }
+petgraph = "0.8"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
