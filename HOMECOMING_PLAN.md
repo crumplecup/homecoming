@@ -10,51 +10,65 @@ programs and extract minimal slices back out of them.
 The design deliberately does not target arbitrary Rust programs, and it is
 deliberately two-tiered rather than one design applied uniformly.
 
-**Core tier** — `Code`, `Scope`, `Locality` in `homecoming_core` — has no
-dependency on `amenable` and works for any type. What it buys: a program
-that could previously only *perform* an operation can now also *emit* the
-source of that operation, and isolate a minimal, structurally valid slice
-(edge-closed, rooted) of a larger program. No claim beyond structural
-validity is made at this tier, because nothing about a bare `Code`
-implementor says anything was ever proven.
+**Core tier** — `Code`, `Scope`, `Locality`, `Extent` in `homecoming_core`
+— has no dependency on `amenable` and works for any type. What it buys: a
+program that could previously only *perform* an operation can now also
+*emit* the source of that operation, and isolate a minimal, structurally
+valid slice (edge-closed, rooted) of a larger program. No claim beyond
+structural validity is made at this tier, because nothing about a bare
+`Code` implementor says anything was ever proven.
 
-**Bridge tier** — a separate crate, name not yet settled, depending on
-*both* `homecoming_core` and `amenable_core` — targets programs shaped like
-a state machine with exchange properties, using `amenable`'s actual
+**`homecoming_amenable`** — a workspace member depending on *both*
+`homecoming_core` and `amenable_core`, surfaced through the top-level
+`homecoming` facade behind an `amenable` Cargo feature so the core trait
+infrastructure stays lean by default — targets programs shaped like a
+state machine with exchange properties, using `amenable`'s actual
 `StateMachine`/`Exchange` traits directly, proof-token machinery included,
 not a homecoming-native lookalike. That is a deliberate choice, not an
 oversight: `amenable_core::StateMachine` is minimal enough (`{ type State;
 type Invariant; }`) that reinventing it bought nothing, but
 `amenable_core::Exchange` carries real `Evidence`/`ProofToken` machinery
 that a lookalike trait *couldn't* carry, because that machinery is the
-whole reason the bridge tier is worth having: shaving a state machine that
-is bound to real `Exchange` doesn't just preserve graph connectivity, it
-preserves the actual proof obligations the original upheld, checkably, not
-by convention. The exact mechanism — what method checks this, and how — is
-not yet designed (see Open Questions).
+whole reason this crate is worth having: `StateMachine`/`Exchange` bounds
+let `Extent` reason about which code is live directly from proven
+transition structure, not only from `Scope`'s generic edge-closed/rooted
+graph closure — shaving a state machine bound to real `Exchange` doesn't
+just preserve graph connectivity, it preserves the actual proof
+obligations the original upheld, checkably, not by convention. The exact
+mechanism — what method checks this, and how — is not yet designed (see
+Open Questions).
 
 The core tier alone is the success case for the earlier plan version's
-"conform to the shape, unlock isolation for free" thesis; the bridge tier
+"conform to the shape, unlock isolation for free" thesis; `homecoming_amenable`
 is the stronger version of that thesis, available only where real proof
 machinery already exists to make the stronger claim honest. General,
-unstructured Rust stays out of scope for both tiers on purpose; it is a
-much harder problem and not the one this crate exists to solve.
+unstructured Rust stays out of scope for either on purpose; it is a much
+harder problem and not the one this crate exists to solve.
 
 This started as `amenable_code`, a scaffolded slot inside the `amenable`
 workspace (`github.com/crumplecup/amenable`). It has been split off into its
 own repository on further thought: source-code capture is orthogonal to
-`amenable`'s constitutional proof-role family — it doesn't need `amenable`'s
-traits to exist, and `amenable`'s traits will need it, not the other way
-around. Keeping it independent means it can be depended on by anything that
-wants exact source capture, not only formal-verification frameworks, and it
-avoids entangling `amenable`'s dependency-light core with
-`syn`/`quote`/`proc-macro2`/`petgraph`.
+`amenable`'s constitutional proof-role family and useful to anything that
+wants exact source capture, not only formal-verification frameworks —
+keeping `homecoming_core` independent avoids entangling `amenable`'s
+dependency-light core with `syn`/`quote`/`proc-macro2`/`petgraph`
+unconditionally.
 
-`amenable` is expected to take `homecoming` as a dependency once this
-design stabilizes, with several of its traits (at minimum `Witness`,
-possibly `Evidence`) expected to also implement `Code` — see
-`AMENABLE_PLAN.md` in the `amenable` repository for the consuming side of
-that relationship.
+The dependency direction is settled as one arrow, not two: `homecoming`
+depends on `amenable`, never the reverse. The motivating use case is
+generating modular MCP tool code from compartmentalized operations —
+`Extent`'s naming/liveness machinery — where every generated tool's code
+must be traceable back to the specific formal verification it came from,
+which needs both crates' capabilities cooperating, not merely
+interoperating. Some audit tooling originally sketched as living inside
+`amenable` (see `AMENABLE_PLAN.md`) turns out to belong in
+`homecoming_amenable` instead — a change of location, not a contradiction,
+once it's tooling that inherently needs both `Code`/`Extent` and
+`StateMachine`/`Exchange` in scope at once. Where `amenable`'s own traits
+(`Witness` in particular) want to cooperate with source capture, that
+cooperation lives in `homecoming_amenable` as glue/adapter code, not as a
+dependency `amenable` itself takes on — `amenable_core` stays exactly as
+dependency-light as it already is.
 
 ## Status
 
@@ -62,30 +76,32 @@ Early design, no implementation yet. `syn`/`quote`/`proc-macro2`/`petgraph`
 dependencies are resolved and pinned. The crate is a workspace mirroring
 `amenable`'s shape, with one more member than previously planned:
 
-- **`homecoming_core`** — the `Code`/`Scope`/`Locality` trait family,
-  `Selection`/`Source`/`Binding`, and `Fragment`. No dependency on
-  `amenable`. No content yet. No longer defines `Family`/`Sibling`/
-  `Relation`/`Tradition` — that was the pre-bridge-tier design and is
+- **`homecoming_core`** — the `Code`/`Scope`/`Locality`/`Extent` trait
+  family and `Fragment`, plus `Ir` (this crate's own `petgraph`-backed
+  `Fragment` implementation). No dependency on `amenable`.
+  `Selection`/`Source`/`Binding` are designed (see below) but not yet
+  implemented. No longer defines `Family`/`Sibling`/`Relation`/`Tradition`
+  — that was an earlier pre-`homecoming_amenable` design and is
   superseded; see "Goal" above.
-- **A bridge crate** (name not yet settled) — depends on both
-  `homecoming_core` and `amenable_core`; provides the `StateMachine`/
-  `Exchange`-gated capability. Not yet scaffolded.
+- **`homecoming_amenable`** — depends on both `homecoming_core` and
+  `amenable_core`; provides the `StateMachine`/`Exchange`-gated
+  capability. Not yet scaffolded.
 - **`homecoming_derive`** — a `#[derive(...)]` macro generating `Code`
   impls. Deliberately not started — see "Build order" below.
 - **`homecoming`** — the top-level facade, re-exporting `homecoming_core`
-  (and the bridge crate and `homecoming_derive` once they have content) for
-  user convenience, the same sanctioned-exception pattern `amenable` uses
-  for its own facade.
+  (and `homecoming_amenable`, behind an `amenable` feature, and
+  `homecoming_derive`, once they have content) for user convenience, the
+  same sanctioned-exception pattern `amenable` uses for its own facade.
 
 Naming is settled for the core trait family (`Code`, `Scope`, `Locality`,
-`Selection`, `Source`, `Binding`) and for the convention that a trait's
-primary method mirrors the trait's own name in lowercase (`Code::code()`,
-`Scope::scope()`). Open for the bridge crate's name and for the derive
-macro — `Homecoming` is the working name for the latter, matching the
-crate, but whether the macro should mirror a trait name or diverge from it
-(both patterns exist in this ecosystem — see `elicitation`/
-`elicitation_derive`, where `#[derive(Elicit)]` does not match any single
-trait name) is undecided until there's a macro to name.
+`Extent`, `Selection`, `Source`, `Binding`), for `homecoming_amenable`, and
+for the convention that a trait's primary method mirrors the trait's own
+name in lowercase (`Code::code()`, `Scope::scope()`). Open for the derive
+macro's name — `Homecoming` is the working name, matching the crate, but
+whether the macro should mirror a trait name or diverge from it (both
+patterns exist in this ecosystem — see `elicitation`/`elicitation_derive`,
+where `#[derive(Elicit)]` does not match any single trait name) is
+undecided until there's a macro to name.
 
 ## Capture and replay, not generation
 
@@ -274,7 +290,7 @@ result is structurally sound. Nothing here says it preserves whatever the
 *original* was proven to guarantee, because at the core tier nothing was
 necessarily proven in the first place.
 
-## The bridge tier's success case: proof-preserving shaving
+## `homecoming_amenable`'s success case: proof-preserving shaving
 
 This is where the stronger claim lives, and it requires the real
 `amenable_core::StateMachine`/`amenable_core::Exchange` traits, proof
@@ -286,7 +302,7 @@ upholds what the original proved, rather than only whether it's still
 graph-connected. A homecoming-native lookalike trait could copy the shape
 but not this property, because there would be nothing to check against.
 
-The bridge crate's blanket impl is expected to look like:
+`homecoming_amenable`'s blanket impl is expected to look like:
 
 ```rust
 impl<T> Scope for T
@@ -305,10 +321,11 @@ where
 Not yet designed: the concrete mechanism that checks "does this shaved
 subset still uphold the proof obligations `Exchange` originally
 established" — what gets called, what gets compared to what, and what it
-means for that check to fail. This was asserted as the bridge tier's
+means for that check to fail. This was asserted as `homecoming_amenable`'s
 payoff in conversation before it was designed as a signature; resolving it
-concretely is bridge-crate work, not core-crate work, and comes after the
-core tier is implemented and compiling (see Phased Implementation Plan).
+concretely is `homecoming_amenable` work, not `homecoming_core` work, and
+comes after the core tier is implemented and compiling (see Phased
+Implementation Plan).
 
 ## `Extent`: the user's grammar for what's worth isolating
 
@@ -399,11 +416,11 @@ path from what user code does.
 
 Core-tier concept, not specific to either tier's shaving mechanism — any
 `Scope` implementor's `boundary()` entries can be filtered by `Selection`
-and value-bound by `Source`, whether the implementor is a bare `Code` value
-or a `StateMachine`/`Exchange`-bound bridge-tier type. Which items are
-*available* to select among is `Extent`'s job (above), not `Selection`'s —
-`Selection` only ever operates over what an `Extent` annotation already
-made isolatable.
+and value-bound by `Source`, whether the implementor is a bare `Code`
+value or a `StateMachine`/`Exchange`-bound `homecoming_amenable` type.
+Which items are *available* to select among is `Extent`'s job (above),
+not `Selection`'s — `Selection` only ever operates over what an `Extent`
+annotation already made isolatable.
 
 Shaving a value down to a smaller one turned out not to be one decision
 but two independent ones, and conflating them was the mistake in an
@@ -570,8 +587,9 @@ claim, verified two ways that do different jobs:
   mechanically, with no review required. `Scope::scope()` has the same
   obligation one level up: the isolated slice, compiled standalone, must
   behave identically to the equivalent code extracted by hand — and for a
-  bridge-tier shaved result, "behave identically" means preserving the
-  proof obligations the original's `Exchange` upheld, not just compiling.
+  `homecoming_amenable`-shaved result, "behave identically" means
+  preserving the proof obligations the original's `Exchange` upheld, not
+  just compiling.
 - **Strong form.** Reconstruct a whole program from its emitted fragments,
   regenerate its proofs (via whatever proof-emission machinery the
   consuming crate provides — `amenable`'s `Witness`, most likely), and
@@ -587,16 +605,21 @@ claim, verified two ways that do different jobs:
 ## Design Constraints
 
 - No dependency on `amenable` or any proof-role trait family from
-  `homecoming_core` specifically — `Code`/`Scope`/`Locality` stay
+  `homecoming_core` specifically — `Code`/`Scope`/`Locality`/`Extent` stay
   consumable by anything that wants exact source capture and structural
   subsetting, not only formal-verification frameworks. The `amenable`
-  dependency is confined to the bridge crate, which is opt-in, not part of
-  `homecoming_core` or the top-level `homecoming` facade's required graph.
-- Where `amenable` traits are reused (the bridge crate's
+  dependency is confined to `homecoming_amenable`, surfaced through the
+  top-level `homecoming` facade behind an `amenable` Cargo feature, not
+  part of `homecoming_core`'s or `homecoming`'s default/required graph.
+  The dependency arrow runs one way only — `homecoming` depends on
+  `amenable`, never the reverse; any cooperation `amenable`'s own traits
+  need with source capture is glue code living in `homecoming_amenable`,
+  not a dependency `amenable_core` takes on.
+- Where `amenable` traits are reused (`homecoming_amenable`'s
   `StateMachine`/`Exchange`), reuse the real thing, proof tokens included —
   no homecoming-native lookalike traits that copy the shape without the
   substance, since the substance (real proof machinery) is the entire
-  reason the bridge tier exists.
+  reason `homecoming_amenable` exists.
 - No unnecessary runtime dependencies beyond `syn`/`quote`/`proc-macro2`/
   `petgraph`, which are load-bearing for the core capability, not optional
   extras.
@@ -618,9 +641,9 @@ claim, verified two ways that do different jobs:
   relationship to a type that wasn't itself an interface.
 - No targeting arbitrary, unstructured Rust programs — the design scopes
   deliberately to programs with a `Scope` implementation (core tier) or a
-  state-machine shape (bridge tier), where isolation has a precise,
-  checkable meaning, not a harder general program-slicing problem this
-  crate doesn't need to solve to be useful.
+  state-machine shape (`homecoming_amenable`), where isolation has a
+  precise, checkable meaning, not a harder general program-slicing problem
+  this crate doesn't need to solve to be useful.
 - No fixed "modes" for configuring emission (a replay mode, an interactive
   mode) — `Selection` and `Source` are independent, composable pieces, and
   any combination of them is a valid configuration, not just the two that
@@ -667,9 +690,9 @@ claim, verified two ways that do different jobs:
 ### Phase 4: Core-tier shaving demo (no `amenable` involved)
 
 The core tier's success case: prove structural shaving — `Scope`,
-`Locality`, `Selection`, `Source`, `Binding` — actually works end to end,
-by hand, on a type with no `amenable` bound at all, before the bridge
-crate exists.
+`Locality`, `Extent`, `Selection`, `Source`, `Binding` — actually works
+end to end, by hand, on a type with no `amenable` bound at all, before
+`homecoming_amenable` exists.
 
 - [x] Implement `Inline`, `Reference`, and `Omit` as `Locality`. Two real
   refinements surfaced only once this was actually written, not while it
@@ -715,14 +738,22 @@ crate exists.
   = an arithmetic filter, `Source` = always `None`) — from the same two
   composable pieces, with no mode-specific code written for either.
 - [ ] Decide how `scope()` and `scope_with()` relate.
-- [ ] Define `Extent`, hand-implement it for the calculator example
+- [x] Define `Extent`, hand-implement it for the calculator example
   (`anchor()` matching on `"divide"`/`"multiply"`/`"add"`/`"subtract"`, by
   hand, no derive/`inventory` yet), and confirm each name resolves to the
   same closure `Scope::boundary()` would already compute for that
   operation — no separate traversal logic written for `Extent` itself.
-- [ ] Confirm names never matched in `anchor()` are genuinely invisible to
-  `Selection` — not merely excluded by policy, but never candidates at
-  all, since they were never given a name to be selected by.
+  `calculator_anchor_resolves_named_operations_to_their_own_code` and
+  `calculator_anchor_ignores_shave_configuration` confirm this, the latter
+  also confirming naming and shaving stay independent questions: an
+  anchor stays valid even when `include_advanced` shaves it out of a
+  rendered `scope()`.
+- [x] Confirm a name never declared in `anchor()` answers `None`
+  (`calculator_anchor_returns_none_for_undeclared_names`) — the
+  precondition for being invisible to `Selection`. The full claim (a
+  never-declared name is invisible to `Selection` specifically, not just
+  to `anchor()`) is still open until `Selection` itself exists to check
+  against.
 - [ ] Prototype the `inventory`-backed registry once the hand-written
   `anchor()` case above works: a static descriptor type, `inventory::submit!`
   calls standing in for what the derive will eventually emit, and a lookup
@@ -736,41 +767,61 @@ crate exists.
 - [ ] Name and implement the lateralizing composition traits that fall out
   of that exercise.
 
-### Phase 6: The bridge crate — proof-preserving shaving
+### Phase 6: `homecoming_amenable` — proof-preserving shaving
 
 Not started until Phase 4 proves the core tier's mechanics actually work —
-the bridge crate builds directly on `Scope`/`Locality`/`Selection`/
-`Source`, it doesn't reinvent them.
+`homecoming_amenable` builds directly on `Scope`/`Locality`/`Extent`/
+`Selection`/`Source`, it doesn't reinvent them.
 
-- [ ] Scaffold the bridge crate (name TBD) as a new workspace member,
-  depending on `homecoming_core` and `amenable_core`.
+- [ ] Scaffold `homecoming_amenable` as a new workspace member, depending
+  on `homecoming_core` and `amenable_core`, and wire it into the
+  top-level `homecoming` facade behind an `amenable` Cargo feature so the
+  default dependency graph stays lean.
 - [ ] Implement the blanket `Scope` impl gated on real
   `amenable_core::StateMachine` + `amenable_core::Exchange`.
+- [ ] Implement `Extent` for `StateMachine`/`Exchange`-bound types using
+  their real transition structure directly, rather than `Scope`'s generic
+  edge-closed/rooted graph closure — the concrete payoff of taking a real
+  `amenable` dependency instead of a homecoming-native lookalike.
 - [ ] Design and implement the concrete mechanism that checks a shaved
   subset still upholds the proof obligations the original `Exchange`
-  established — the open question from "The bridge tier's success case"
-  above.
+  established — the open question from "`homecoming_amenable`'s success
+  case" above.
 - [ ] Re-run the stoplight/calculator demos from Phase 4 through a type
   that additionally implements real `amenable::StateMachine`/`Exchange`,
-  and confirm the bridge tier's stronger guarantee actually holds where the
-  core tier's did not attempt to make that claim.
+  and confirm `homecoming_amenable`'s stronger guarantee actually holds
+  where the core tier's did not attempt to make that claim.
 
-### Phase 7: `amenable` becomes a consumer
+### Phase 7: relocate audit tooling into `homecoming_amenable`
 
-- [ ] `amenable` adds `homecoming` (and the bridge crate) as a dependency.
-- [ ] At least one `amenable` trait (`Witness` is the leading candidate)
-  implements or requires `Code`.
+`amenable` never takes `homecoming` as a dependency — the dependency arrow
+runs one way. Any cooperation between `amenable`'s traits (`Witness` in
+particular) and source capture is implemented in `homecoming_amenable`,
+which already has both `homecoming_core` and `amenable_core` in scope,
+rather than by `amenable_core` depending on `homecoming`.
+
+- [ ] Identify which audit-tooling designs sketched in `AMENABLE_PLAN.md`
+  actually need both `Code`/`Extent` and `StateMachine`/`Exchange` in
+  scope at once, and relocate their design notes into this plan —
+  a change of location, not a re-derivation.
+- [ ] Implement adapter/glue code in `homecoming_amenable` that lets a
+  `Witness`-bearing `amenable` type also produce `Code`/`Extent` output —
+  composition in `homecoming_amenable`, not a `Code` bound added to
+  `Witness` itself.
 - [ ] Exercise the strong-form round-trip check against a real
   `Witness`-bearing example once `amenable`'s proof-emission machinery
   exists.
+- [ ] Confirm `amenable_core`'s own `Cargo.toml` never gains a
+  `homecoming`/`homecoming_core` dependency at any point in this process —
+  the check that the one-way arrow actually held.
 
 ### Phase 8: The derive macro
 
 Not started until Phases 3–6 have produced enough hand-written `impl Code`/
-`impl Scope`/`impl Extent` examples, core and bridge tier both, to extract
-a reliable pattern from — designing the macro before the representation it
-targets is proven repeats the mistake that motivated this crate's own
-existence.
+`impl Scope`/`impl Extent` examples, `homecoming_core` and
+`homecoming_amenable` both, to extract a reliable pattern from —
+designing the macro before the representation it targets is proven
+repeats the mistake that motivated this crate's own existence.
 
 - [ ] Extract the repeatable shape of the hand-written examples into macro
   logic.
@@ -804,15 +855,14 @@ existence.
 - Is "edge-closed and rooted" a sufficient definition of "complete logical
   entity" for core-tier shaving, or does even the core tier need a
   stronger check for some cases?
-- What concrete mechanism does the bridge crate use to check that a shaved
-  subset upholds the proof obligations the original `Exchange` established
-  — a method that compares `Precondition`/`Postcondition` `Evidence`
-  directly, something that re-runs `Witness` against the shaved result, or
-  something else not yet considered?
+- What concrete mechanism does `homecoming_amenable` use to check that a
+  shaved subset upholds the proof obligations the original `Exchange`
+  established — a method that compares `Precondition`/`Postcondition`
+  `Evidence` directly, something that re-runs `Witness` against the
+  shaved result, or something else not yet considered?
 - Should the derive macro's name mirror `Code` (or `Scope`), or diverge
   entirely, the way `#[derive(Elicit)]` diverges from any single trait name
   in `elicitation`?
-- What should the bridge crate be named?
 - How does `scope_with(selection, source)` relate to `scope()` — a
   convenience wrapper with trivial always-include/always-bind defaults, or
   a genuinely separate entry point?
@@ -825,6 +875,12 @@ existence.
 - What attribute grammar does the derive use to mark a method as an
   `Extent` unit — a bare `#[extent]`, something carrying a name/config
   like `#[instrument]` does, or something else?
+- What does the `homecoming_amenable` glue between `Witness` and
+  `Code`/`Extent` concretely look like — a wrapper type that holds a
+  `Witness`-bearing value alongside its own `Code`/`Extent` impl, a
+  blanket impl bound on `Witness` (which would still not require
+  `amenable_core` to depend on anything, since the blanket impl itself
+  lives in `homecoming_amenable`), or something else?
 - How does a compile-time `inventory`-registered `(type, method, name)`
   descriptor resolve to an actual node in a specific *instance*'s
   `petgraph` graph — `petgraph::NodeIndex` only means something within one
@@ -857,4 +913,10 @@ ships. And when a user can declare which parts of their own program are
 worth isolating in their own vocabulary — `Extent` attributes on their own
 methods and types — without hand-writing `Code`/`Scope` impls, the same
 way `#[instrument]` lets a `tracing` user opt into span-shaped observation
-without hand-writing span management.
+without hand-writing span management. And when the dependency arrow
+between the two crate families stays a single line — `homecoming` depends
+on `amenable`, never the reverse — so that generating modular MCP tool
+code from `Extent`-compartmentalized operations, each traceable back to
+the specific formal verification it came from, is `homecoming_amenable`
+composing both crates' capabilities rather than either crate reaching back
+into the other.
