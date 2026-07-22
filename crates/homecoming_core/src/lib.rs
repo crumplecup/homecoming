@@ -25,12 +25,22 @@
 //! `Scope::scope_with`, rather than a fixed choice baked into a `Scope`
 //! implementor's own `boundary()`.
 //!
+//! `Source` and `Binding` answer a finer-grained question than `Locality`/
+//! `Selection` do — not "is this boundary entry included," but "is this
+//! one value, within an included entry, frozen or left open." `Source`
+//! decides whether a value is available at all, in terms of a raw
+//! [`Args`] value with no `Fragment`/`Code` involved; `Binding` decides
+//! separately how that answer gets rendered (`Bound`, a frozen literal;
+//! `Free`, an open slot).
+//!
 //! See `HOMECOMING_PLAN.md` and `homecoming.md` in the repository root for
 //! the full design rationale.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod args;
+mod binding;
 mod code;
 mod extent;
 mod fragment;
@@ -38,7 +48,10 @@ mod ir;
 mod locality;
 mod scope;
 mod selection;
+mod source;
 
+pub use args::Args;
+pub use binding::{Binding, Bound, Free};
 pub use code::Code;
 pub use extent::Extent;
 pub use fragment::Fragment;
@@ -46,3 +59,4 @@ pub use ir::Ir;
 pub use locality::{Inline, Locality, Omit, Reference};
 pub use scope::Scope;
 pub use selection::Selection;
+pub use source::Source;

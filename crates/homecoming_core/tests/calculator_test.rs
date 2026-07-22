@@ -9,8 +9,11 @@
 //! excludes `*`/`/` entirely — "a calculator with just `+` and `-`" as a
 //! pluggable filter, not a field baked into the type.
 
-use homecoming_core::{Code, Extent, Inline, Ir, Locality, Scope, Selection};
+use homecoming_core::{
+    Args, Binding, Bound, Code, Extent, Free, Inline, Ir, Locality, Scope, Selection, Source,
+};
 use quote::ToTokens;
+use std::collections::VecDeque;
 
 // --- syn AST construction helpers, direct construction, no parsing ---
 
@@ -96,6 +99,45 @@ impl Add {
     fn apply(&self, a: i32, b: i32) -> i32 {
         a + b
     }
+
+    /// Emits this calculation's code with each argument independently
+    /// frozen or left open, depending on what `source` has for it — a
+    /// finer-grained shifting-scope question than `Selection` answers:
+    /// not "is this operation included," but "is this one value, within
+    /// an included operation, frozen or open." Both slots bound produces
+    /// a direct substitution (`3 + 4`); both free matches `code()`
+    /// exactly (`|a: i32, b: i32| a + b`); a mix partially applies
+    /// (`|b: i32| 3 + b`).
+    fn code_with(&self, source: &mut dyn Source<Args = IntArg>) -> Ir {
+        let mut params: Vec<(&str, &str)> = Vec::new();
+
+        let a = match source.value_mut_for("a") {
+            Some(arg) => Bound::new(arg.value().code()).contribute(),
+            None => {
+                params.push(("a", "i32"));
+                Free::new(Ir::leaf(path_expr("a"))).contribute()
+            }
+        };
+        let b = match source.value_mut_for("b") {
+            Some(arg) => Bound::new(arg.value().code()).contribute(),
+            None => {
+                params.push(("b", "i32"));
+                Free::new(Ir::leaf(path_expr("b"))).contribute()
+            }
+        };
+
+        let body = binary_expr(
+            a.expr().clone(),
+            syn::BinOp::Add(Default::default()),
+            b.expr().clone(),
+        );
+
+        if params.is_empty() {
+            Ir::leaf(body)
+        } else {
+            Ir::leaf(closure_expr(&params, body))
+        }
+    }
 }
 impl Code for Add {
     type Fragment = Ir;
@@ -106,6 +148,56 @@ impl Code for Add {
             path_expr("b"),
         );
         Ir::leaf(closure_expr(&[("a", "i32"), ("b", "i32")], body))
+    }
+}
+
+/// A raw `i32` handed back by [`AddArgs`] — the `Args` half of the
+/// `Source`/`Args` split: `Source` deals in this, not in `Fragment`
+/// directly, so `Code`'s existing `i32` impl is what turns it into one.
+struct IntArg(i32);
+
+impl Args for IntArg {
+    type Value = i32;
+    fn value(&self) -> i32 {
+        self.0
+    }
+}
+
+/// A queue-shaped `Source`: user-submitted values held for later draining
+/// into a real `add(x, y)` call, one slot's queue at a time. An empty
+/// queue behaves as "always free" without needing a separate unit-struct
+/// `Source` for that case.
+struct AddArgs {
+    a: VecDeque<i32>,
+    b: VecDeque<i32>,
+}
+
+impl AddArgs {
+    fn new() -> Self {
+        Self {
+            a: VecDeque::new(),
+            b: VecDeque::new(),
+        }
+    }
+}
+
+impl Source for AddArgs {
+    type Args = IntArg;
+
+    fn value_for(&self, slot: &str) -> Option<IntArg> {
+        match slot {
+            "a" => self.a.front().copied().map(IntArg),
+            "b" => self.b.front().copied().map(IntArg),
+            _ => None,
+        }
+    }
+
+    fn value_mut_for(&mut self, slot: &str) -> Option<IntArg> {
+        match slot {
+            "a" => self.a.pop_front().map(IntArg),
+            "b" => self.b.pop_front().map(IntArg),
+            _ => None,
+        }
     }
 }
 
@@ -483,4 +575,101 @@ fn calculator_anchor_returns_none_for_undeclared_names() {
     // "clear" was never annotated as an isolatable unit — never a
     // candidate at all, not merely excluded by a Selection policy.
     assert!(calculator.anchor("clear").is_none());
+}
+
+#[test]
+fn bound_binding_round_trips_to_the_same_value() -> Result<(), syn::Error> {
+    let value = 3i32.code();
+    let bound = Bound::new(value.clone());
+    let contribution = bound.contribute();
+
+    let tokens = contribution.to_token_stream();
+    let reparsed: syn::Expr = syn::parse2(tokens)?;
+    assert_eq!(contribution.expr(), &reparsed);
+    assert_eq!(contribution.expr(), value.expr());
+    Ok(())
+}
+
+#[test]
+fn free_binding_round_trips_to_an_accepting_placeholder() -> Result<(), syn::Error> {
+    let placeholder = Ir::leaf(path_expr("a"));
+    let free = Free::new(placeholder.clone());
+    let contribution = free.contribute();
+
+    let tokens = contribution.to_token_stream();
+    let reparsed: syn::Expr = syn::parse2(tokens)?;
+    assert_eq!(contribution.expr(), &reparsed);
+    // A Free slot is a bare identifier, not tied to any particular frozen
+    // value — ready for the emitted program to supply its own.
+    assert_eq!(contribution.expr(), placeholder.expr());
+    Ok(())
+}
+
+#[test]
+fn add_code_with_fully_bound_produces_direct_substitution() -> Result<(), syn::Error> {
+    let add = Add;
+    let mut args = AddArgs::new();
+    args.a.push_back(3);
+    args.b.push_back(4);
+
+    let fragment = add.code_with(&mut args);
+    let tokens = fragment.to_token_stream();
+    let _reparsed: syn::Expr = syn::parse2(tokens.clone())?;
+
+    let rendered = tokens.to_string();
+    assert!(rendered.contains('3'), "rendered: {rendered}");
+    assert!(rendered.contains('4'), "rendered: {rendered}");
+    assert!(!rendered.contains('|'), "rendered: {rendered}");
+    Ok(())
+}
+
+#[test]
+fn add_code_with_fully_free_matches_plain_code() -> Result<(), syn::Error> {
+    let add = Add;
+    let mut args = AddArgs::new();
+
+    let fragment = add.code_with(&mut args);
+    let tokens = fragment.to_token_stream();
+    let reparsed: syn::Expr = syn::parse2(tokens.clone())?;
+    assert_eq!(fragment.expr(), &reparsed);
+
+    // Fully free must match code()'s own unparameterized rendering
+    // exactly -- an empty Source and no Source at all are the same thing.
+    assert_eq!(fragment.expr(), add.code().expr());
+    Ok(())
+}
+
+#[test]
+fn add_code_with_mixed_binding_partially_applies() -> Result<(), syn::Error> {
+    let add = Add;
+    let mut args = AddArgs::new();
+    args.a.push_back(3);
+    // b left empty -- stays free.
+
+    let fragment = add.code_with(&mut args);
+    let tokens = fragment.to_token_stream();
+    let _reparsed: syn::Expr = syn::parse2(tokens.clone())?;
+
+    let rendered = tokens.to_string();
+    assert!(rendered.contains('3'), "rendered: {rendered}");
+    assert!(rendered.contains('b'), "rendered: {rendered}");
+    // `a` is no longer a parameter -- it was frozen, not just referenced.
+    assert!(!rendered.contains("a :"), "rendered: {rendered}");
+    Ok(())
+}
+
+#[test]
+fn add_code_with_drains_the_queue() {
+    let add = Add;
+    let mut args = AddArgs::new();
+    args.a.push_back(3);
+    args.a.push_back(30);
+    args.b.push_back(4);
+
+    let _ = add.code_with(&mut args);
+
+    // The first call must have drained the front of each queue -- the
+    // whole point of value_mut_for over value_for.
+    assert_eq!(args.a.front().copied(), Some(30));
+    assert_eq!(args.b.front().copied(), None);
 }
