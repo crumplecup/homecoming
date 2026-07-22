@@ -5,165 +5,12 @@
 
 use amenable_core::Exchange;
 use amenable_kani::{Green, GreenToken, Red, Stoplight, Yellow};
-use homecoming_core::{Code, Inline, Ir, Locality, Scope};
+use homecoming_core::{
+    Code, Extent, Inline, Ir, Locality, Scope, Selection, block_expr, call_expr, ident_pat,
+    let_stmt, method_call_expr, path_expr, tuple_expr, tuple_pat, unwrap_infallible_expr,
+    wildcard_pat,
+};
 use quote::ToTokens;
-
-// --- syn AST construction helpers, direct construction, no parsing ---
-
-fn ident(name: &str) -> syn::Ident {
-    syn::Ident::new(name, proc_macro2::Span::call_site())
-}
-
-fn path_expr(segments: &[&str]) -> syn::Expr {
-    let mut punctuated = syn::punctuated::Punctuated::new();
-    for segment in segments {
-        punctuated.push(syn::PathSegment {
-            ident: ident(segment),
-            arguments: syn::PathArguments::None,
-        });
-    }
-    syn::Expr::Path(syn::ExprPath {
-        attrs: Vec::new(),
-        qself: None,
-        path: syn::Path {
-            leading_colon: None,
-            segments: punctuated,
-        },
-    })
-}
-
-fn call_expr(func: syn::Expr, args: Vec<syn::Expr>) -> syn::Expr {
-    syn::Expr::Call(syn::ExprCall {
-        attrs: Vec::new(),
-        func: Box::new(func),
-        paren_token: Default::default(),
-        args: args.into_iter().collect(),
-    })
-}
-
-fn method_call_expr(receiver: syn::Expr, method: &str, args: Vec<syn::Expr>) -> syn::Expr {
-    syn::Expr::MethodCall(syn::ExprMethodCall {
-        attrs: Vec::new(),
-        receiver: Box::new(receiver),
-        dot_token: Default::default(),
-        method: ident(method),
-        turbofish: None,
-        paren_token: Default::default(),
-        args: args.into_iter().collect(),
-    })
-}
-
-fn wildcard_pat() -> syn::Pat {
-    syn::Pat::Wild(syn::PatWild {
-        attrs: Vec::new(),
-        underscore_token: Default::default(),
-    })
-}
-
-fn ident_pat(name: &str) -> syn::Pat {
-    syn::Pat::Ident(syn::PatIdent {
-        attrs: Vec::new(),
-        by_ref: None,
-        mutability: None,
-        ident: ident(name),
-        subpat: None,
-    })
-}
-
-fn tuple_struct_pat(segments: &[&str], elems: Vec<syn::Pat>) -> syn::Pat {
-    let mut punctuated = syn::punctuated::Punctuated::new();
-    for segment in segments {
-        punctuated.push(syn::PathSegment {
-            ident: ident(segment),
-            arguments: syn::PathArguments::None,
-        });
-    }
-    syn::Pat::TupleStruct(syn::PatTupleStruct {
-        attrs: Vec::new(),
-        qself: None,
-        path: syn::Path {
-            leading_colon: None,
-            segments: punctuated,
-        },
-        paren_token: Default::default(),
-        elems: elems.into_iter().collect(),
-    })
-}
-
-fn tuple_pat(elems: Vec<syn::Pat>) -> syn::Pat {
-    syn::Pat::Tuple(syn::PatTuple {
-        attrs: Vec::new(),
-        paren_token: Default::default(),
-        elems: elems.into_iter().collect(),
-    })
-}
-
-fn match_arm(pat: syn::Pat, body: syn::Expr) -> syn::Arm {
-    syn::Arm {
-        attrs: Vec::new(),
-        pat,
-        guard: None,
-        fat_arrow_token: Default::default(),
-        body: Box::new(body),
-        comma: Some(Default::default()),
-    }
-}
-
-fn match_expr(scrutinee: syn::Expr, arms: Vec<syn::Arm>) -> syn::Expr {
-    syn::Expr::Match(syn::ExprMatch {
-        attrs: Vec::new(),
-        match_token: Default::default(),
-        expr: Box::new(scrutinee),
-        brace_token: Default::default(),
-        arms,
-    })
-}
-
-/// `match <scrutinee> { Ok(<ok_pat>) => <ok_pat's bound name>, Err(never)
-/// => match never {} }` — the honest way to discharge a
-/// `Result<T, Infallible>` without `.unwrap()`: the `Err` arm's body is
-/// itself a match with zero arms, which only typechecks because
-/// `Infallible` has zero variants, so it is unreachable by construction,
-/// not by convention.
-fn unwrap_infallible_expr(
-    scrutinee: syn::Expr,
-    ok_pat: syn::Pat,
-    ok_value: syn::Expr,
-) -> syn::Expr {
-    let never_arm = match_arm(
-        tuple_struct_pat(&["Err"], vec![ident_pat("never")]),
-        match_expr(path_expr(&["never"]), Vec::new()),
-    );
-    let ok_arm = match_arm(tuple_struct_pat(&["Ok"], vec![ok_pat]), ok_value);
-    match_expr(scrutinee, vec![ok_arm, never_arm])
-}
-
-fn let_stmt(pat: syn::Pat, init: syn::Expr) -> syn::Stmt {
-    syn::Stmt::Local(syn::Local {
-        attrs: Vec::new(),
-        let_token: Default::default(),
-        pat,
-        init: Some(syn::LocalInit {
-            eq_token: Default::default(),
-            expr: Box::new(init),
-            diverge: None,
-        }),
-        semi_token: Default::default(),
-    })
-}
-
-fn block_expr(stmts: Vec<syn::Stmt>, tail: syn::Expr) -> syn::Expr {
-    let mut stmts = stmts;
-    stmts.push(syn::Stmt::Expr(tail, None));
-    syn::Expr::Block(syn::ExprBlock {
-        attrs: Vec::new(),
-        label: None,
-        block: syn::Block {
-            brace_token: Default::default(),
-            stmts,
-        },
-    })
-}
 
 /// The `Green -> Yellow` transition as a real, callable operation that can
 /// also emit the exact code that performs it — the same quote/eval duality
@@ -280,7 +127,7 @@ impl Scope for YellowToRed {
         Ir::leaf(block_expr(vec![binding], tail))
     }
 
-    fn scope_with(&self, selection: &dyn homecoming_core::Selection<Ir>) -> Ir {
+    fn scope_with(&self, selection: &dyn Selection<Ir>) -> Ir {
         let dependency = GreenToYellow.code();
         if selection.includes(&dependency) {
             self.scope()
@@ -342,21 +189,15 @@ impl Code for StoplightCycle {
     type Fragment = Ir;
 
     fn code(&self) -> Ir {
-        let elems = [
+        let elems = vec![
             GreenToYellow.code().expr().clone(),
             YellowToRed.scope().expr().clone(),
-        ]
-        .into_iter()
-        .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        ];
+        Ir::leaf(tuple_expr(elems))
     }
 }
 
-impl homecoming_core::Extent for StoplightCycle {
+impl Extent for StoplightCycle {
     fn anchor(&self, name: &str) -> Option<Ir> {
         match name {
             "green_to_yellow" => Some(GreenToYellow.code()),
@@ -371,8 +212,6 @@ impl homecoming_core::Extent for StoplightCycle {
 
 #[test]
 fn anchor_gives_back_live_code_not_just_leaf_code() -> Result<(), Box<dyn std::error::Error>> {
-    use homecoming_core::Extent;
-
     let cycle = StoplightCycle;
 
     let green_to_yellow = cycle

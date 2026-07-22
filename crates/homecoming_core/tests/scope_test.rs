@@ -1,4 +1,4 @@
-use homecoming_core::{Code, Inline, Ir, Locality, Scope, Selection};
+use homecoming_core::{Code, Inline, Ir, Locality, Scope, Selection, path_expr, tuple_expr};
 use quote::ToTokens;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -6,22 +6,6 @@ enum Stoplight {
     Green,
     Yellow,
     Red,
-}
-
-fn variant_path(variant: &str) -> syn::Path {
-    let mut segments = syn::punctuated::Punctuated::new();
-    segments.push(syn::PathSegment {
-        ident: syn::Ident::new("Stoplight", proc_macro2::Span::call_site()),
-        arguments: syn::PathArguments::None,
-    });
-    segments.push(syn::PathSegment {
-        ident: syn::Ident::new(variant, proc_macro2::Span::call_site()),
-        arguments: syn::PathArguments::None,
-    });
-    syn::Path {
-        leading_colon: None,
-        segments,
-    }
 }
 
 impl Code for Stoplight {
@@ -33,12 +17,7 @@ impl Code for Stoplight {
             Stoplight::Yellow => "Yellow",
             Stoplight::Red => "Red",
         };
-        let expr = syn::Expr::Path(syn::ExprPath {
-            attrs: Vec::new(),
-            qself: None,
-            path: variant_path(variant),
-        });
-        Ir::leaf(expr)
+        Ir::leaf(path_expr(&["Stoplight", variant]))
     }
 }
 
@@ -53,17 +32,11 @@ impl Code for Transition {
     type Fragment = Ir;
 
     fn code(&self) -> Ir {
-        let elems = [
+        let elems = vec![
             self.from.code().expr().clone(),
             self.to.code().expr().clone(),
-        ]
-        .into_iter()
-        .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        ];
+        Ir::leaf(tuple_expr(elems))
     }
 }
 
@@ -86,30 +59,22 @@ impl Scope for Transition {
         // so appending it here would silently reintroduce whatever
         // boundary() omitted (the same bug Calculator's scope() had, see
         // calculator_test.rs).
-        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
+        let elems: Vec<syn::Expr> = self
             .boundary()
             .filter_map(|(dependency, locality)| locality.contribute(&dependency))
             .map(|fragment| fragment.expr().clone())
             .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        Ir::leaf(tuple_expr(elems))
     }
 
     fn scope_with(&self, selection: &dyn Selection<Ir>) -> Ir {
-        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
+        let elems: Vec<syn::Expr> = self
             .boundary()
             .filter(|(dependency, _)| selection.includes(dependency))
             .filter_map(|(dependency, locality)| locality.contribute(&dependency))
             .map(|fragment| fragment.expr().clone())
             .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        Ir::leaf(tuple_expr(elems))
     }
 }
 
@@ -185,11 +150,7 @@ fn reference_locality_names_without_reproducing() -> Result<(), Box<dyn std::err
     use homecoming_core::Reference;
 
     let dependency = Stoplight::Red.code();
-    let replacement = Ir::leaf(syn::Expr::Path(syn::ExprPath {
-        attrs: Vec::new(),
-        qself: None,
-        path: variant_path("Green"),
-    }));
+    let replacement = Ir::leaf(path_expr(&["Stoplight", "Green"]));
     let reference = Reference::new(replacement);
     let contribution = reference
         .contribute(&dependency)

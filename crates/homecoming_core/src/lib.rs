@@ -33,6 +33,12 @@
 //! separately how that answer gets rendered (`Bound`, a frozen literal;
 //! `Free`, an open slot).
 //!
+//! The `binary_expr`/`call_expr`/`path_expr`/... family of direct `syn`
+//! AST construction helpers `Code`/`Scope`/`Extent` implementors need is
+//! promoted here (see `build`'s own module docs) once the same handful of
+//! builders had been hand-written nearly identically in several separate
+//! examples.
+//!
 //! See `HOMECOMING_PLAN.md` and `homecoming.md` in the repository root for
 //! the full design rationale.
 
@@ -41,6 +47,7 @@
 
 mod args;
 mod binding;
+mod build;
 mod code;
 mod extent;
 mod fragment;
@@ -52,6 +59,11 @@ mod source;
 
 pub use args::Args;
 pub use binding::{Binding, Bound, Free};
+pub use build::{
+    binary_expr, block_expr, call_expr, closure_expr, ident, ident_pat, let_stmt, match_arm,
+    match_expr, method_call_expr, path, path_expr, struct_expr, tuple_expr, tuple_pat,
+    tuple_struct_pat, type_path, typed_pat, unwrap_infallible_expr, wildcard_pat,
+};
 pub use code::Code;
 pub use extent::Extent;
 pub use fragment::Fragment;

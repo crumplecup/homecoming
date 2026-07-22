@@ -11,86 +11,10 @@
 
 use homecoming_core::{
     Args, Binding, Bound, Code, Extent, Free, Inline, Ir, Locality, Scope, Selection, Source,
+    binary_expr, closure_expr, path_expr, tuple_expr,
 };
 use quote::ToTokens;
 use std::collections::VecDeque;
-
-// --- syn AST construction helpers, direct construction, no parsing ---
-
-fn ident(name: &str) -> syn::Ident {
-    syn::Ident::new(name, proc_macro2::Span::call_site())
-}
-
-fn single_segment_path(name: &str) -> syn::Path {
-    let mut segments = syn::punctuated::Punctuated::new();
-    segments.push(syn::PathSegment {
-        ident: ident(name),
-        arguments: syn::PathArguments::None,
-    });
-    syn::Path {
-        leading_colon: None,
-        segments,
-    }
-}
-
-fn path_expr(name: &str) -> syn::Expr {
-    syn::Expr::Path(syn::ExprPath {
-        attrs: Vec::new(),
-        qself: None,
-        path: single_segment_path(name),
-    })
-}
-
-fn type_path(name: &str) -> syn::Type {
-    syn::Type::Path(syn::TypePath {
-        qself: None,
-        path: single_segment_path(name),
-    })
-}
-
-fn typed_pat(name: &str, ty: &str) -> syn::Pat {
-    syn::Pat::Type(syn::PatType {
-        attrs: Vec::new(),
-        pat: Box::new(syn::Pat::Ident(syn::PatIdent {
-            attrs: Vec::new(),
-            by_ref: None,
-            mutability: None,
-            ident: ident(name),
-            subpat: None,
-        })),
-        colon_token: Default::default(),
-        ty: Box::new(type_path(ty)),
-    })
-}
-
-fn binary_expr(left: syn::Expr, op: syn::BinOp, right: syn::Expr) -> syn::Expr {
-    syn::Expr::Binary(syn::ExprBinary {
-        attrs: Vec::new(),
-        left: Box::new(left),
-        op,
-        right: Box::new(right),
-    })
-}
-
-fn closure_expr(params: &[(&str, &str)], body: syn::Expr) -> syn::Expr {
-    let mut inputs = syn::punctuated::Punctuated::new();
-    for (name, ty) in params {
-        inputs.push(typed_pat(name, ty));
-    }
-    syn::Expr::Closure(syn::ExprClosure {
-        attrs: Vec::new(),
-        lifetimes: None,
-        constness: None,
-        movability: None,
-        asyncness: None,
-        capture: None,
-        or1_token: Default::default(),
-        inputs,
-        or2_token: Default::default(),
-        output: syn::ReturnType::Default,
-        body: Box::new(body),
-    })
-}
 
 // --- calculator operations: real function + Code, on the same operation ---
 
@@ -115,14 +39,14 @@ impl Add {
             Some(arg) => Bound::new(arg.value().code()).contribute(),
             None => {
                 params.push(("a", "i32"));
-                Free::new(Ir::leaf(path_expr("a"))).contribute()
+                Free::new(Ir::leaf(path_expr(&["a"]))).contribute()
             }
         };
         let b = match source.value_mut_for("b") {
             Some(arg) => Bound::new(arg.value().code()).contribute(),
             None => {
                 params.push(("b", "i32"));
-                Free::new(Ir::leaf(path_expr("b"))).contribute()
+                Free::new(Ir::leaf(path_expr(&["b"]))).contribute()
             }
         };
 
@@ -143,9 +67,9 @@ impl Code for Add {
     type Fragment = Ir;
     fn code(&self) -> Ir {
         let body = binary_expr(
-            path_expr("a"),
+            path_expr(&["a"]),
             syn::BinOp::Add(Default::default()),
-            path_expr("b"),
+            path_expr(&["b"]),
         );
         Ir::leaf(closure_expr(&[("a", "i32"), ("b", "i32")], body))
     }
@@ -211,9 +135,9 @@ impl Code for Subtract {
     type Fragment = Ir;
     fn code(&self) -> Ir {
         let body = binary_expr(
-            path_expr("a"),
+            path_expr(&["a"]),
             syn::BinOp::Sub(Default::default()),
-            path_expr("b"),
+            path_expr(&["b"]),
         );
         Ir::leaf(closure_expr(&[("a", "i32"), ("b", "i32")], body))
     }
@@ -229,9 +153,9 @@ impl Code for Multiply {
     type Fragment = Ir;
     fn code(&self) -> Ir {
         let body = binary_expr(
-            path_expr("a"),
+            path_expr(&["a"]),
             syn::BinOp::Mul(Default::default()),
-            path_expr("b"),
+            path_expr(&["b"]),
         );
         Ir::leaf(closure_expr(&[("a", "i32"), ("b", "i32")], body))
     }
@@ -247,9 +171,9 @@ impl Code for Divide {
     type Fragment = Ir;
     fn code(&self) -> Ir {
         let body = binary_expr(
-            path_expr("a"),
+            path_expr(&["a"]),
             syn::BinOp::Div(Default::default()),
-            path_expr("b"),
+            path_expr(&["b"]),
         );
         Ir::leaf(closure_expr(&[("a", "i32"), ("b", "i32")], body))
     }
@@ -269,7 +193,7 @@ impl Code for Double {
         // Reuse the existing Code impl for i32 for the literal `2`, rather
         // than hand-building a second literal-construction path.
         let two = 2i32.code().expr().clone();
-        let body = binary_expr(path_expr("x"), syn::BinOp::Mul(Default::default()), two);
+        let body = binary_expr(path_expr(&["x"]), syn::BinOp::Mul(Default::default()), two);
         Ir::leaf(closure_expr(&[("x", "i32")], body))
     }
 }
@@ -286,19 +210,13 @@ struct Calculator {
 impl Code for Calculator {
     type Fragment = Ir;
     fn code(&self) -> Ir {
-        let elems = [
+        let elems = vec![
             self.add.code().expr().clone(),
             self.subtract.code().expr().clone(),
             self.multiply.code().expr().clone(),
             self.divide.code().expr().clone(),
-        ]
-        .into_iter()
-        .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        ];
+        Ir::leaf(tuple_expr(elems))
     }
 }
 
@@ -335,30 +253,22 @@ impl Scope for Calculator {
         // the same underlying data, so the tail has to be built from what
         // actually survived Locality filtering, not from the
         // always-unshaved code().
-        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
+        let elems: Vec<syn::Expr> = self
             .boundary()
             .filter_map(|(dependency, locality)| locality.contribute(&dependency))
             .map(|fragment| fragment.expr().clone())
             .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        Ir::leaf(tuple_expr(elems))
     }
 
     fn scope_with(&self, selection: &dyn Selection<Ir>) -> Ir {
-        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
+        let elems: Vec<syn::Expr> = self
             .boundary()
             .filter(|(dependency, _)| selection.includes(dependency))
             .filter_map(|(dependency, locality)| locality.contribute(&dependency))
             .map(|fragment| fragment.expr().clone())
             .collect();
-        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
-            attrs: Vec::new(),
-            paren_token: Default::default(),
-            elems,
-        }))
+        Ir::leaf(tuple_expr(elems))
     }
 }
 
@@ -592,7 +502,7 @@ fn bound_binding_round_trips_to_the_same_value() -> Result<(), syn::Error> {
 
 #[test]
 fn free_binding_round_trips_to_an_accepting_placeholder() -> Result<(), syn::Error> {
-    let placeholder = Ir::leaf(path_expr("a"));
+    let placeholder = Ir::leaf(path_expr(&["a"]));
     let free = Free::new(placeholder.clone());
     let contribution = free.contribute();
 
