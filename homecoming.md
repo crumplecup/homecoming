@@ -50,18 +50,17 @@ pub trait Locality<F: Fragment> {
 
 ## Trait Extent
 
-Programming language theory already draws this distinction: scope is the static, lexical question (what does this structure look like), extent is the dynamic, temporal question (when is a recording live). Scope answers what; Extent answers when — and which. Extent is the user's grammar for declaring which methods and types are meaningful units worth isolating at all, mirroring `tracing`'s span lifecycle (RAII guard, not manual start/stop, for the same reason `tracing` doesn't trust every caller to remember to call stop).
+Programming language theory already draws this distinction: scope is the static, lexical question (what does this structure look like), extent is the dynamic, temporal question (when is a recording live). Extent answers which — a grammar for naming which methods and types are meaningful, isolatable units at all. But "live" here is a compiler's sense of liveness, not a runtime-tracing one: a name marks an anchor already present in the dependency graph a Scope implementor builds, and the live code for that name is whatever Scope's existing edge-closed/rooted closure reaches from that anchor — the same graph `boundary()` already describes, not a new traversal to build. Code unreachable from any named anchor is simply dead, the same sense a compiler's liveness analysis gives the term.
 
 ```rust
-pub trait Extent {
-    type Fragment: Fragment;
-    type Guard;
-
-    fn start(&mut self, name: &str) -> Self::Guard;
+pub trait Extent: Code {
+    fn anchor(&self, name: &str) -> Option<Self::Fragment>;
 }
 ```
 
-Once a guard drops, the result implements Scope, queried the same way any other Scope implementor is. The derive is expected to insert `Extent::start()`/guard calls around methods the user annotates, the same role `#[instrument]` plays for `tracing` — a method never annotated is never its own recordable unit, just plumbing absorbed into whatever encloses it. That reframes Selection: Extent decides which dishes exist on the buffet table at all; Selection decides what ends up on a given plate. Selection only ever operates over what an Extent annotation already made isolatable.
+Declaring an extent is a compile-time fact, not a runtime event, so there is no start/stop lifecycle and no guard to drop: the derive is expected to emit a static `(type, method, name)` descriptor per annotated method via `inventory::submit!`, collected into one process-wide, read-only registry — closer to how `#[instrument]` doesn't need a central span registry either, just a marker at the definition site. A query by name reads the registry to find the anchor, then asks that instance's `anchor()` for the closure computed fresh from its current graph, not a value tracked as something happened. Recording user-submitted runtime values is a different, already-solved problem — a queue-shaped `Source` draining into `Binding`, not Extent's job at all.
+
+The buffet framing still holds: Extent decides which dishes exist on the table at all — a method never annotated is never its own isolatable unit, just plumbing absorbed into whatever encloses it. Selection decides what ends up on a given plate, operating only over what Extent already made a candidate.
 
 ## The two tiers
 

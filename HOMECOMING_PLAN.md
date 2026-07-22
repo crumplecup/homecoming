@@ -312,50 +312,66 @@ core tier is implemented and compiling (see Phased Implementation Plan).
 
 ## `Extent`: the user's grammar for what's worth isolating
 
-`Scope` and `Extent` split the same distinction programming language theory
-already draws between *scope* and *extent*: scope is the static, lexical
-question (what does this structure look like), extent is the dynamic,
-temporal question (when is a recording live). `Scope` answers what;
-`Extent` answers when — and, more importantly, *which* — by giving the
-user a grammar for declaring which methods and types are meaningful units
-worth being able to isolate at all.
+`Scope` and `Extent` borrow their names from the same distinction
+programming language theory draws between *scope* and *extent*: scope is
+the static, lexical question (what does this structure look like), extent
+is about a binding's lifetime. This design uses that borrowed vocabulary
+for a narrower purpose than PL theory's own dynamic/runtime sense of the
+word: `Scope` answers what; `Extent` answers *which* — a grammar for
+declaring which methods and types are meaningful units worth being able to
+isolate at all.
 
-The guiding intuition is still a tracing span, taken further: `tracing`
-doesn't just isolate log output structurally, it has explicit lifecycle
-methods — a span starts, runs, and stops, RAII-shaped so a guard dropping
-marks the end rather than trusting every caller to remember. `Extent` is
-the same shape, applied to code capture instead of log capture:
+"Live" here is deliberately the compiler's sense of liveness, not a
+runtime-tracing one: a definition is live at a point if it is used to
+compute a result reachable from there, and dead otherwise. `Extent` does
+not track anything as it happens — it names an anchor already present in
+the dependency graph a `Scope` implementor builds (`Ir`'s `petgraph` graph,
+concretely, at the core tier), and querying a name just reuses `Scope`'s
+existing edge-closed/rooted closure computed from that anchor. An earlier
+pass modeled this as an RAII guard mirroring `tracing`'s span lifecycle
+(`start()` returning a `Guard`, recording ending on drop), and that was a
+wrong turn: it borrowed the *temporal* half of the tracing analogy (spans
+start and stop at runtime) when what's actually needed is the *naming*
+half (spans are addressable by name). Recording user-submitted runtime
+values live is a different, already-solved problem — a queue-shaped
+`Source` draining into `Binding` (below) — not `Extent`'s job at all.
 
 ```rust
-pub trait Extent {
-    type Fragment: Fragment;
-    type Guard;
-
-    /// Begin recording; recording ends when the returned guard drops.
-    fn start(&mut self, name: &str) -> Self::Guard;
+pub trait Extent: Code {
+    /// The live code for a named, isolatable unit, or `None` if `name`
+    /// was never declared for this type.
+    fn anchor(&self, name: &str) -> Option<Self::Fragment>;
 }
 ```
 
-Once a guard drops, the result is something that implements `Scope` —
-queried the same way any other `Scope` implementor is. `Extent` owns only
-the temporal question (when did recording happen, and around what);
-`Scope` owns only the structural question (what does the recorded result
-look like). Same separation of concerns `Code`/`Locality`/`Scope` already
-have from each other, not a new one invented for this trait specifically.
+Declaring an extent is a compile-time fact recorded once, not a runtime
+event repeated per call: the derive is expected to emit a static
+`(type, method, name)` descriptor per annotated method via
+`inventory::submit!`, collected into one process-wide, read-only
+registry — `inventory` fits because the set of declared extents is
+genuinely static, known at compile time from the annotations in the user's
+own source, unlike the mutable, per-call state a `tracing` span registry
+actually needs. Querying a name resolves it through that registry to find
+which type/method it names, then calls `anchor()` on a live instance of
+that type to get back the closure computed fresh from its current
+dependency graph — nothing is tracked between queries; each one is
+answered from scratch, the same way `Scope::boundary()` is recomputed
+rather than cached.
 
 ### Why this matters more than a mechanism: it's the user's actual API
 
-The point of `Extent` isn't just "a well-shaped way to record a trace." It
-is how a user expresses which cut points in *their own program* are
+The point of `Extent` isn't just "a well-shaped way to name a cut point."
+It is how a user expresses which cut points in *their own program* are
 meaningful, in their own vocabulary, without hand-writing `Code`/`Scope`
 impls at all. The derive-driven build order (Phase 8, not yet started) is
 expected to land here specifically: `#[derive(Homecoming)]` on a type, plus
-an attribute on the methods the user considers meaningful units, inserts
-`Extent::start()`/guard calls around those methods automatically — the
-same way `#[instrument]` in `tracing` wraps a function body with span
-enter/exit. A method the user does *not* annotate never becomes its own
-recordable unit; it is just plumbing, absorbed into whatever encloses it,
-invisible to the isolation machinery entirely.
+an attribute on the methods the user considers meaningful units, registers
+those methods' anchors via `inventory::submit!` automatically — the same
+role `#[instrument]` plays for `tracing`, minus the runtime enter/exit,
+since nothing here needs to happen at call time. A method the user does
+*not* annotate never becomes its own isolatable unit; it is just plumbing,
+absorbed into whatever encloses it, invisible to the isolation machinery
+entirely.
 
 That reframes something about `Selection` (above) worth stating plainly:
 `Extent`-annotation is what creates the *menu* `Selection` later chooses
@@ -700,12 +716,17 @@ crate exists.
   composable pieces, with no mode-specific code written for either.
 - [ ] Decide how `scope()` and `scope_with()` relate.
 - [ ] Define `Extent`, hand-implement it for the calculator example
-  (`start()` called around `divide`/`multiply`/`add`/`subtract`, by hand,
-  no derive yet), and confirm the recorded result implements `Scope` and
-  is queryable the same way any other `Scope` implementor is.
-- [ ] Confirm methods never wrapped in an `Extent::start()`/guard pair are
-  genuinely invisible to `Selection` — not merely excluded by policy, but
-  never candidates at all.
+  (`anchor()` matching on `"divide"`/`"multiply"`/`"add"`/`"subtract"`, by
+  hand, no derive/`inventory` yet), and confirm each name resolves to the
+  same closure `Scope::boundary()` would already compute for that
+  operation — no separate traversal logic written for `Extent` itself.
+- [ ] Confirm names never matched in `anchor()` are genuinely invisible to
+  `Selection` — not merely excluded by policy, but never candidates at
+  all, since they were never given a name to be selected by.
+- [ ] Prototype the `inventory`-backed registry once the hand-written
+  `anchor()` case above works: a static descriptor type, `inventory::submit!`
+  calls standing in for what the derive will eventually emit, and a lookup
+  function that resolves a name to the type/method it names.
 
 ### Phase 5: Composition
 
@@ -801,16 +822,22 @@ existence.
 - Does `Selection` need the same `dyn`-dispatch treatment `Locality` does,
   for the same reason (heterogeneous policies), or can it stay a single
   concrete type per `scope_with()` call?
-- What does `Extent::Guard` do on drop, concretely — does dropping it
-  finalize a `Scope`-implementing value immediately, or does it register
-  the recorded span somewhere for later retrieval? Where does the recorded
-  data actually live between `start()` and the guard dropping?
 - What attribute grammar does the derive use to mark a method as an
   `Extent` unit — a bare `#[extent]`, something carrying a name/config
   like `#[instrument]` does, or something else?
-- Can `Extent` recordings nest (an extent-marked method calling another
-  extent-marked method), and if so, does the inner one become part of the
-  outer one's boundary automatically, mirroring how `tracing` spans nest?
+- How does a compile-time `inventory`-registered `(type, method, name)`
+  descriptor resolve to an actual node in a specific *instance*'s
+  `petgraph` graph — `petgraph::NodeIndex` only means something within one
+  graph, not globally, so the registry can name a method but not a node
+  directly. Does the derive-generated `anchor()` body just re-derive the
+  node by re-running the same construction logic `code()`/`boundary()`
+  already use, making the registry closer to "which method to call" than
+  "which node to fetch"?
+- Do nested `Extent` names (an extent-marked method calling another
+  extent-marked method) resolve automatically, since the inner name's
+  anchor is just another reachable node in the outer's dependency graph —
+  or does something more need to be true for the outer's closure to
+  include it?
 
 ## Success Condition
 
