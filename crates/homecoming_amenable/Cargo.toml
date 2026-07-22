@@ -1,0 +1,23 @@
+[package]
+name = "homecoming_amenable"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+
+description = "StateMachine/Exchange-bound Code, Scope, and Extent for amenable types"
+keywords = ["codegen", "formal-verification", "proof", "state-machine"]
+categories = ["development-tools", "rust-patterns"]
+
+[dependencies]
+homecoming_core = { workspace = true }
+amenable_core = { path = "../../../amenable/crates/amenable_core" }
+
+[dev-dependencies]
+amenable_kani = { path = "../../../amenable/crates/amenable_kani" }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

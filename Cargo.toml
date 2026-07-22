@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/homecoming",
+  "crates/homecoming_amenable",
   "crates/homecoming_core",
   "crates/homecoming_derive",
 ]
@@ -17,6 +18,7 @@ documentation = "https://docs.rs/homecoming"
 
 [workspace.dependencies]
 homecoming = { path = "crates/homecoming", version = "0.1.0" }
+homecoming_amenable = { path = "crates/homecoming_amenable", version = "0.1.0" }
 homecoming_core = { path = "crates/homecoming_core", version = "0.1.0" }
 homecoming_derive = { path = "crates/homecoming_derive", version = "0.1.0" }
 petgraph = "0.8"
