@@ -7,7 +7,7 @@
 //! subsetting: the same four operations, shaved down to just `+`/`-` via
 //! `Locality`, produce code that structurally excludes `*`/`/` entirely.
 
-use homecoming_core::{Code, Inline, Ir, Locality, Omit, Scope};
+use homecoming_core::{Code, Extent, Inline, Ir, Locality, Omit, Scope};
 use quote::ToTokens;
 
 // --- syn AST construction helpers, direct construction, no parsing ---
@@ -254,6 +254,24 @@ impl Scope for Calculator {
     }
 }
 
+impl Extent for Calculator {
+    // Reuses each operation's own code() directly — no new traversal
+    // logic, the same closure Scope::boundary() already builds for that
+    // name. Every name here is declared regardless of include_advanced:
+    // naming and shaving are different questions (see HOMECOMING_PLAN.md's
+    // Extent/Selection split), so a name stays a valid anchor even when
+    // the current shave configuration would omit it from scope().
+    fn anchor(&self, name: &str) -> Option<Ir> {
+        match name {
+            "add" => Some(self.add.code()),
+            "subtract" => Some(self.subtract.code()),
+            "multiply" => Some(self.multiply.code()),
+            "divide" => Some(self.divide.code()),
+            _ => None,
+        }
+    }
+}
+
 // --- tests ---
 
 #[test]
@@ -353,4 +371,78 @@ fn shaved_calculator_operations_still_execute_correctly() {
     assert_eq!(calculator.subtract.apply(5, 3), 2);
     assert_eq!(calculator.multiply.apply(3, 4), 12);
     assert_eq!(calculator.divide.apply(10, 2), 5);
+}
+
+#[test]
+fn calculator_anchor_resolves_named_operations_to_their_own_code()
+-> Result<(), Box<dyn std::error::Error>> {
+    let calculator = Calculator {
+        add: Add,
+        subtract: Subtract,
+        multiply: Multiply,
+        divide: Divide,
+        include_advanced: true,
+    };
+
+    let anchored = calculator
+        .anchor("add")
+        .ok_or("add must be a declared anchor")?;
+    assert_eq!(anchored.expr(), calculator.add.code().expr());
+
+    let anchored = calculator
+        .anchor("subtract")
+        .ok_or("subtract must be a declared anchor")?;
+    assert_eq!(anchored.expr(), calculator.subtract.code().expr());
+
+    let anchored = calculator
+        .anchor("multiply")
+        .ok_or("multiply must be a declared anchor")?;
+    assert_eq!(anchored.expr(), calculator.multiply.code().expr());
+
+    let anchored = calculator
+        .anchor("divide")
+        .ok_or("divide must be a declared anchor")?;
+    assert_eq!(anchored.expr(), calculator.divide.code().expr());
+
+    Ok(())
+}
+
+#[test]
+fn calculator_anchor_ignores_shave_configuration() -> Result<(), Box<dyn std::error::Error>> {
+    // A name stays a valid anchor even when include_advanced would omit it
+    // from a rendered scope() — Extent only answers "is this a nameable
+    // unit," never "is this included in a given shaved result." Compare
+    // to shaved_calculator_scope_excludes_multiply_and_divide, where the
+    // same configuration does exclude multiply/divide from scope()'s
+    // *rendered* output; anchor() is a different question entirely.
+    let calculator = Calculator {
+        add: Add,
+        subtract: Subtract,
+        multiply: Multiply,
+        divide: Divide,
+        include_advanced: false,
+    };
+
+    let anchored = calculator
+        .anchor("multiply")
+        .ok_or("multiply stays a declared anchor even when shaved out of scope()")?;
+    assert_eq!(anchored.expr(), calculator.multiply.code().expr());
+
+    Ok(())
+}
+
+#[test]
+fn calculator_anchor_returns_none_for_undeclared_names() {
+    let calculator = Calculator {
+        add: Add,
+        subtract: Subtract,
+        multiply: Multiply,
+        divide: Divide,
+        include_advanced: true,
+    };
+
+    // "clear" was never annotated as an isolatable unit — never a
+    // candidate at all, not merely excluded by a Selection policy that
+    // hasn't been implemented yet.
+    assert!(calculator.anchor("clear").is_none());
 }

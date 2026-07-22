@@ -15,6 +15,11 @@
 //! but callers with a different representation in mind can satisfy
 //! `Fragment` on their own terms.
 //!
+//! `Extent` layers a naming grammar on top of `Scope`: a named anchor into
+//! the dependency graph a `Scope` implementor already builds, so a caller
+//! can query "the live code for `divide`" by name instead of hand-writing
+//! a `Scope` impl for every cut point.
+//!
 //! See `HOMECOMING_PLAN.md` and `homecoming.md` in the repository root for
 //! the full design rationale.
 
@@ -22,12 +27,14 @@
 #![warn(missing_docs)]
 
 mod code;
+mod extent;
 mod fragment;
 mod ir;
 mod locality;
 mod scope;
 
 pub use code::Code;
+pub use extent::Extent;
 pub use fragment::Fragment;
 pub use ir::Ir;
 pub use locality::{Inline, Locality, Omit, Reference};
