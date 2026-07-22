@@ -1,6 +1,6 @@
 //! `Scope`: isolating a minimal slice of code, not the whole program.
 
-use crate::{Code, Locality};
+use crate::{Code, Locality, Selection};
 
 /// Isolates the minimal slice of code that contributes to one value or
 /// operation, rather than everything transitively reachable from it.
@@ -34,4 +34,15 @@ pub trait Scope: Code {
     /// isolated from its surrounding program the way a span isolates a
     /// log region from the rest of a trace.
     fn scope(&self) -> Self::Fragment;
+
+    /// The isolated slice, filtered by an external, pluggable
+    /// [`Selection`] policy — `scope()` narrowed to only the `boundary()`
+    /// entries `selection` includes, still rendered per each entry's own
+    /// `Locality`. `Selection` is a filter layered on top of `Locality`,
+    /// not a replacement for it: an entry survives only if `selection`
+    /// includes it *and* its `Locality::contribute` answers `Some`.
+    ///
+    /// No default body, for the same reason `scope()` has none — see this
+    /// trait's own docs.
+    fn scope_with(&self, selection: &dyn Selection<Self::Fragment>) -> Self::Fragment;
 }

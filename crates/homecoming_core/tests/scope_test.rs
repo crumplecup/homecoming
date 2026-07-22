@@ -1,4 +1,4 @@
-use homecoming_core::{Code, Inline, Ir, Locality, Scope};
+use homecoming_core::{Code, Inline, Ir, Locality, Scope, Selection};
 use quote::ToTokens;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,24 +78,37 @@ impl Scope for Transition {
 
     fn scope(&self) -> Ir {
         // No lateralizing composition trait exists yet (see
-        // HOMECOMING_PLAN.md Phase 5), so this hand-writes the same
-        // sequence-into-a-block shape the old generic default used,
-        // specific to Ir since Fragment carries no composition capability.
-        let mut stmts: Vec<syn::Stmt> = self
+        // HOMECOMING_PLAN.md Phase 5), so this hand-writes composition
+        // directly against Ir, tupling whatever boundary() survivors
+        // Locality contributes. Deliberately does NOT reuse code()'s
+        // output as the tail the way an earlier version did — code()
+        // always builds the full (from, to) tuple regardless of Locality,
+        // so appending it here would silently reintroduce whatever
+        // boundary() omitted (the same bug Calculator's scope() had, see
+        // calculator_test.rs).
+        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
             .boundary()
             .filter_map(|(dependency, locality)| locality.contribute(&dependency))
-            .map(|fragment| syn::Stmt::Expr(fragment.expr().clone(), Some(Default::default())))
+            .map(|fragment| fragment.expr().clone())
             .collect();
-        stmts.push(syn::Stmt::Expr(self.code().expr().clone(), None));
-
-        let block = syn::Block {
-            brace_token: Default::default(),
-            stmts,
-        };
-        Ir::leaf(syn::Expr::Block(syn::ExprBlock {
+        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
             attrs: Vec::new(),
-            label: None,
-            block,
+            paren_token: Default::default(),
+            elems,
+        }))
+    }
+
+    fn scope_with(&self, selection: &dyn Selection<Ir>) -> Ir {
+        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
+            .boundary()
+            .filter(|(dependency, _)| selection.includes(dependency))
+            .filter_map(|(dependency, locality)| locality.contribute(&dependency))
+            .map(|fragment| fragment.expr().clone())
+            .collect();
+        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
+            attrs: Vec::new(),
+            paren_token: Default::default(),
+            elems,
         }))
     }
 }
@@ -127,6 +140,33 @@ fn transition_scope_includes_both_boundary_states() -> Result<(), syn::Error> {
     let rendered = tokens.to_string();
     assert!(rendered.contains("Green"), "rendered: {rendered}");
     assert!(rendered.contains("Yellow"), "rendered: {rendered}");
+    Ok(())
+}
+
+/// A policy that only orders the `Green` dish off the menu, regardless of
+/// what `Locality` would otherwise render.
+struct OnlyGreen;
+
+impl Selection<Ir> for OnlyGreen {
+    fn includes(&self, item: &Ir) -> bool {
+        item.to_token_stream().to_string().contains("Green")
+    }
+}
+
+#[test]
+fn scope_with_excludes_entries_selection_does_not_include() -> Result<(), syn::Error> {
+    let transition = Transition {
+        from: Stoplight::Green,
+        to: Stoplight::Yellow,
+    };
+
+    let scoped = transition.scope_with(&OnlyGreen);
+    let tokens = scoped.to_token_stream();
+    let _reparsed: syn::Expr = syn::parse2(tokens.clone())?;
+
+    let rendered = tokens.to_string();
+    assert!(rendered.contains("Green"), "rendered: {rendered}");
+    assert!(!rendered.contains("Yellow"), "rendered: {rendered}");
     Ok(())
 }
 

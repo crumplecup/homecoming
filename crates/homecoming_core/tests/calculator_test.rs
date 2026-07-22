@@ -5,9 +5,11 @@
 //! implementor emitting its own source — the quote/eval duality that
 //! motivated this crate in the first place. The calculator demonstrates
 //! subsetting: the same four operations, shaved down to just `+`/`-` via
-//! `Locality`, produce code that structurally excludes `*`/`/` entirely.
+//! an external `Selection` policy, produce code that structurally
+//! excludes `*`/`/` entirely — "a calculator with just `+` and `-`" as a
+//! pluggable filter, not a field baked into the type.
 
-use homecoming_core::{Code, Extent, Inline, Ir, Locality, Omit, Scope};
+use homecoming_core::{Code, Extent, Inline, Ir, Locality, Scope, Selection};
 use quote::ToTokens;
 
 // --- syn AST construction helpers, direct construction, no parsing ---
@@ -180,14 +182,13 @@ impl Code for Double {
     }
 }
 
-// --- the calculator: bundles all four, subsettable via boundary/Locality ---
+// --- the calculator: bundles all four, subsettable via Selection ---
 
 struct Calculator {
     add: Add,
     subtract: Subtract,
     multiply: Multiply,
     divide: Divide,
-    include_advanced: bool,
 }
 
 impl Code for Calculator {
@@ -211,38 +212,53 @@ impl Code for Calculator {
 
 impl Scope for Calculator {
     fn boundary(&self) -> impl Iterator<Item = (Ir, Box<dyn Locality<Ir>>)> {
-        let multiply_locality: Box<dyn Locality<Ir>> = if self.include_advanced {
-            Box::new(Inline)
-        } else {
-            Box::new(Omit)
-        };
-        let divide_locality: Box<dyn Locality<Ir>> = if self.include_advanced {
-            Box::new(Inline)
-        } else {
-            Box::new(Omit)
-        };
+        // Every entry is unconditionally Inline here — which operations
+        // actually end up in a given result is Selection's job
+        // (scope_with), not a choice hardcoded per instance the way an
+        // earlier version's include_advanced field made it.
         vec![
             (self.add.code(), Box::new(Inline) as Box<dyn Locality<Ir>>),
             (
                 self.subtract.code(),
                 Box::new(Inline) as Box<dyn Locality<Ir>>,
             ),
-            (self.multiply.code(), multiply_locality),
-            (self.divide.code(), divide_locality),
+            (
+                self.multiply.code(),
+                Box::new(Inline) as Box<dyn Locality<Ir>>,
+            ),
+            (
+                self.divide.code(),
+                Box::new(Inline) as Box<dyn Locality<Ir>>,
+            ),
         ]
         .into_iter()
     }
 
     fn scope(&self) -> Ir {
         // Deliberately does NOT reuse code()'s output as a tail expression
-        // the way Transition's scope() (scope_test.rs) does — code() always
-        // builds the full, unshaved tuple of all four operations, so
-        // appending it here would silently reintroduce whatever boundary()
-        // omitted. Calculator's boundary() and code() describe the same
-        // underlying data, so the tail has to be built from what actually
-        // survived Locality filtering, not from the always-unshaved code().
+        // the way Transition's scope() (scope_test.rs) once did — code()
+        // always builds the full, unshaved tuple of all four operations,
+        // so appending it here would silently reintroduce whatever
+        // boundary() omitted. Calculator's boundary() and code() describe
+        // the same underlying data, so the tail has to be built from what
+        // actually survived Locality filtering, not from the
+        // always-unshaved code().
         let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
             .boundary()
+            .filter_map(|(dependency, locality)| locality.contribute(&dependency))
+            .map(|fragment| fragment.expr().clone())
+            .collect();
+        Ir::leaf(syn::Expr::Tuple(syn::ExprTuple {
+            attrs: Vec::new(),
+            paren_token: Default::default(),
+            elems,
+        }))
+    }
+
+    fn scope_with(&self, selection: &dyn Selection<Ir>) -> Ir {
+        let elems: syn::punctuated::Punctuated<syn::Expr, syn::token::Comma> = self
+            .boundary()
+            .filter(|(dependency, _)| selection.includes(dependency))
             .filter_map(|(dependency, locality)| locality.contribute(&dependency))
             .map(|fragment| fragment.expr().clone())
             .collect();
@@ -257,10 +273,10 @@ impl Scope for Calculator {
 impl Extent for Calculator {
     // Reuses each operation's own code() directly — no new traversal
     // logic, the same closure Scope::boundary() already builds for that
-    // name. Every name here is declared regardless of include_advanced:
-    // naming and shaving are different questions (see HOMECOMING_PLAN.md's
-    // Extent/Selection split), so a name stays a valid anchor even when
-    // the current shave configuration would omit it from scope().
+    // name. Every name here is declared regardless of any Selection
+    // policy: naming and shaving are different questions (see
+    // HOMECOMING_PLAN.md's Extent/Selection split), so a name stays a
+    // valid anchor even when a given scope_with() call would omit it.
     fn anchor(&self, name: &str) -> Option<Ir> {
         match name {
             "add" => Some(self.add.code()),
@@ -269,6 +285,28 @@ impl Extent for Calculator {
             "divide" => Some(self.divide.code()),
             _ => None,
         }
+    }
+}
+
+/// A capability-filter policy: only the additive operations are on offer,
+/// regardless of what Calculator's boundary() otherwise includes — "a
+/// calculator with just `+` and `-`" (HOMECOMING_PLAN.md), expressed as an
+/// external, pluggable policy rather than a struct field.
+struct PlusMinusOnly {
+    allowed: Vec<syn::Expr>,
+}
+
+impl PlusMinusOnly {
+    fn new() -> Self {
+        Self {
+            allowed: vec![Add.code().expr().clone(), Subtract.code().expr().clone()],
+        }
+    }
+}
+
+impl Selection<Ir> for PlusMinusOnly {
+    fn includes(&self, item: &Ir) -> bool {
+        self.allowed.contains(item.expr())
     }
 }
 
@@ -314,7 +352,6 @@ fn full_calculator_scope_includes_all_four_operations() -> Result<(), syn::Error
         subtract: Subtract,
         multiply: Multiply,
         divide: Divide,
-        include_advanced: true,
     };
 
     let scoped = calculator.scope();
@@ -336,10 +373,9 @@ fn shaved_calculator_scope_excludes_multiply_and_divide() -> Result<(), syn::Err
         subtract: Subtract,
         multiply: Multiply,
         divide: Divide,
-        include_advanced: false,
     };
 
-    let scoped = calculator.scope();
+    let scoped = calculator.scope_with(&PlusMinusOnly::new());
     let tokens = scoped.to_token_stream();
     // The shaved result must still compile standalone — the whole point of
     // Fragment being syn-typed rather than raw tokens or a string cut.
@@ -356,15 +392,15 @@ fn shaved_calculator_scope_excludes_multiply_and_divide() -> Result<(), syn::Err
 #[test]
 fn shaved_calculator_operations_still_execute_correctly() {
     // Shaving the emitted code doesn't touch the real operations at all —
-    // Multiply/Divide are omitted from the *code*, not deleted from the
-    // program. This is the distinction between "isolated from the program"
-    // and "removed from the program."
+    // Multiply/Divide can be omitted from the *code* via Selection,
+    // without ever being deleted from the program. This is the
+    // distinction between "isolated from the program" and "removed from
+    // the program."
     let calculator = Calculator {
         add: Add,
         subtract: Subtract,
         multiply: Multiply,
         divide: Divide,
-        include_advanced: false,
     };
 
     assert_eq!(calculator.add.apply(2, 3), 5);
@@ -381,7 +417,6 @@ fn calculator_anchor_resolves_named_operations_to_their_own_code()
         subtract: Subtract,
         multiply: Multiply,
         divide: Divide,
-        include_advanced: true,
     };
 
     let anchored = calculator
@@ -409,23 +444,28 @@ fn calculator_anchor_resolves_named_operations_to_their_own_code()
 
 #[test]
 fn calculator_anchor_ignores_shave_configuration() -> Result<(), Box<dyn std::error::Error>> {
-    // A name stays a valid anchor even when include_advanced would omit it
-    // from a rendered scope() — Extent only answers "is this a nameable
-    // unit," never "is this included in a given shaved result." Compare
-    // to shaved_calculator_scope_excludes_multiply_and_divide, where the
-    // same configuration does exclude multiply/divide from scope()'s
-    // *rendered* output; anchor() is a different question entirely.
+    // A name stays a valid anchor even when a Selection policy would omit
+    // it from a rendered scope_with() result — Extent only answers "is
+    // this a nameable unit," never "is this included in a given shaved
+    // result." Compare to
+    // shaved_calculator_scope_excludes_multiply_and_divide, where the
+    // same PlusMinusOnly selection does exclude multiply/divide from
+    // scope_with()'s *rendered* output; anchor() is a different question
+    // entirely.
     let calculator = Calculator {
         add: Add,
         subtract: Subtract,
         multiply: Multiply,
         divide: Divide,
-        include_advanced: false,
     };
+
+    let shaved = calculator.scope_with(&PlusMinusOnly::new());
+    let rendered = shaved.to_token_stream().to_string();
+    assert!(!rendered.contains('*'), "rendered: {rendered}");
 
     let anchored = calculator
         .anchor("multiply")
-        .ok_or("multiply stays a declared anchor even when shaved out of scope()")?;
+        .ok_or("multiply stays a declared anchor even when shaved out of scope_with()")?;
     assert_eq!(anchored.expr(), calculator.multiply.code().expr());
 
     Ok(())
@@ -438,11 +478,9 @@ fn calculator_anchor_returns_none_for_undeclared_names() {
         subtract: Subtract,
         multiply: Multiply,
         divide: Divide,
-        include_advanced: true,
     };
 
     // "clear" was never annotated as an isolatable unit — never a
-    // candidate at all, not merely excluded by a Selection policy that
-    // hasn't been implemented yet.
+    // candidate at all, not merely excluded by a Selection policy.
     assert!(calculator.anchor("clear").is_none());
 }

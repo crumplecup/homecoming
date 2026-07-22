@@ -20,6 +20,11 @@
 //! can query "the live code for `divide`" by name instead of hand-writing
 //! a `Scope` impl for every cut point.
 //!
+//! `Selection` layers a shave-time policy on top of `Locality`: an
+//! external, pluggable filter over `boundary()`'s entries, queried through
+//! `Scope::scope_with`, rather than a fixed choice baked into a `Scope`
+//! implementor's own `boundary()`.
+//!
 //! See `HOMECOMING_PLAN.md` and `homecoming.md` in the repository root for
 //! the full design rationale.
 
@@ -32,6 +37,7 @@ mod fragment;
 mod ir;
 mod locality;
 mod scope;
+mod selection;
 
 pub use code::Code;
 pub use extent::Extent;
@@ -39,3 +45,4 @@ pub use fragment::Fragment;
 pub use ir::Ir;
 pub use locality::{Inline, Locality, Omit, Reference};
 pub use scope::Scope;
+pub use selection::Selection;
