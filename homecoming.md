@@ -78,19 +78,38 @@ pub trait Selection<F: Fragment> {
 }
 ```
 
-Binding decides, separately, whether an included item's values are frozen or still open — the same question Rust's own block scoping answers for a variable's lifetime. Emission time is one scope; the emitted program's later runtime is a different one. A value crosses that boundary as a frozen literal (Bound) or doesn't cross at all, with the emitted program declaring its own fresh, open slot instead (Free). Whether a bound value came from a replayed file or the last live session doesn't matter to this question — both are just data sitting in the emission-time scope; a Source answers whether it has a value for a given slot, not where that value came from.
+Binding decides, separately, whether an included item's values are frozen or still open — the same question Rust's own block scoping answers for a variable's lifetime. Emission time is one scope; the emitted program's later runtime is a different one. A value crosses that boundary as a frozen literal (Bound) or doesn't cross at all, with the emitted program declaring its own fresh, open slot instead (Free).
 
 ```rust
 pub trait Binding<F: Fragment> {
-    fn contribute(&self, value: &F) -> F;
-}
-
-pub trait Source<F: Fragment> {
-    fn value_for(&self, slot: SlotId) -> Option<F>;
+    fn contribute(&self) -> F;
 }
 ```
 
-Selection and Source are independent, composable pieces, a Lego kit rather than a fixed set of modes. "The keys pressed this session, hardcoded forever" is a session-walked Selection paired with a Source that answers every value. "A calculator with just `+ - * /`" is a capability-filter Selection paired with a Source that answers nothing, leaving every value free. Neither needed its own bespoke mode — they're two different pairs of the same two swappable parts, and any other pair is a new, valid configuration nobody had to design for in advance.
+`Bound<F>`/`Free<F>` are self-contained, constructed with whatever they need up front, rather than mirroring `Locality::contribute(&self, dependency: &F)`'s shape. `boundary()` always hands `Locality` a real dependency to decide about; `Binding` doesn't have that guarantee — `Free` has nothing to be handed when `Source` (below) answered `None`, so passing a parameter would mean passing a dummy.
+
+Source answers whether a value is available for a named slot, decoupled entirely from `Fragment`/`Code` — it hands back an `Args`, a raw value with no code representation, and whoever wants a `Fragment` reaches for whatever `Code` impl that raw value's own type already has (`i32: Code`, unchanged).
+
+```rust
+pub trait Args {
+    type Value;
+    fn value(&self) -> Self::Value;
+}
+
+pub trait Source {
+    type Args: Args;
+
+    fn value_for(&self, slot: &str) -> Option<Self::Args>;
+
+    fn value_mut_for(&mut self, slot: &str) -> Option<Self::Args> {
+        self.value_for(slot)
+    }
+}
+```
+
+`value_for` is a non-consuming peek; `value_mut_for` is permitted to consume or mutate whatever backs it, and defaults to `value_for` — most `Source`s (a fixed, already-captured record) have nothing to drain and never override it. This is what makes real draining possible at all: an earlier pass tried to put the stable/mutating distinction on the *value* `Source` hands back instead of on `Source` itself, but a value with no way back to its `Source` has nothing to mutate. Putting `value_mut_for` on `Source`, taking `&mut self`, gives a queue-shaped `Source` (holding user-submitted values, drained one at a time into a real call — "just the `+ - * /` keys" pressed this session, replayed) a real place to pop from.
+
+Selection and Source are independent, composable pieces, a Lego kit rather than a fixed set of modes. "The keys pressed this session, hardcoded forever" is a session-walked Selection paired with a Source built from that session's actual values. "A calculator with just `+ - * /`" is a capability-filter Selection paired with a Source that answers nothing, leaving every value free — an empty queue-shaped Source already behaves this way, with no separate always-free type needed. Neither needed its own bespoke mode — they're two different pairs of the same two swappable parts, and any other pair is a new, valid configuration nobody had to design for in advance.
 
 ## Narrative
 

@@ -438,19 +438,39 @@ reframes it: a platter isn't necessarily one walked path, it can be an
 arbitrary, deliberately curated selection — "just the `+ - * /` keys," say,
 which no single session ever walks as a path, but which is a perfectly
 valid, edge-closed, rooted subset all the same. What decides inclusion,
-then, is an external, pluggable policy:
+then, is an external, pluggable policy, layered on top of `Locality` rather
+than replacing it — an entry survives only if `Selection` includes it *and*
+its `Locality::contribute` still answers `Some`:
 
 ```rust
-pub trait Selection {
-    /// Should this Sibling or Relation be on the platter at all?
-    fn includes(&self, item: &dyn Code) -> bool;
+pub trait Selection<F: Fragment> {
+    fn includes(&self, item: &F) -> bool;
 }
 ```
+
+Implemented via `Scope::scope_with`, a second required method alongside
+`scope()` — siblings, not one wrapping the other:
+
+```rust
+fn scope_with(&self, selection: &dyn Selection<Self::Fragment>) -> Self::Fragment
+```
+
+`scope_with` has no default body for the same reason `scope()` doesn't:
+`Fragment` still carries no composition capability to build a generic
+default from. Each `Scope` implementor hand-writes both, pending the
+lateralizing composition traits (below).
 
 **Whether an included item's values are frozen or open** is a different
 question, and it doesn't map onto `Locality` at all — an `Inline`d entry
 can still have inputs that are either fixed to a specific observed value
-or left as an open parameter for a future caller to supply.
+or left as an open parameter for a future caller to supply. It also
+doesn't route through `Scope::boundary()`/`scope_with()` at all: `Locality`
+and `Selection` decide whether a whole boundary *entry* is included, but a
+value like one argument of one call is finer-grained than an entry, so
+`Source`/`Binding` are queried directly by whichever method is assembling
+that entry's own code (`Add::code_with` in the calculator example, not
+`Scope::scope_with`).
+
 The right mental model turned out to be Rust's own block scoping: a value's
 lifetime is bounded by the scope it's declared in, and whether it survives
 past that scope is a choice, not a fact about the value itself. Emission
@@ -458,70 +478,88 @@ time is one scope; the emitted, compiled program's own later runtime is a
 different, separate one. A value crosses that boundary one of two ways —
 copied across as a frozen literal (`Bound`), or not copied across at all,
 with the emitted program instead declaring its own fresh, empty slot in its
-own scope, to be filled by whoever calls *it*, later (`Free`). Whether the
-bound value happened to come from a replayed file or the last live session
-doesn't matter to this question — both are just data sitting in the
-emission-time scope, available to be copied across the boundary if asked;
-the `Source` doesn't need to distinguish where it got an answer, only
-whether it has one:
+own scope, to be filled by whoever calls *it*, later (`Free`):
 
 ```rust
-pub trait Binding {
-    fn contribute(&self, value: &dyn Code) -> Fragment;
+pub trait Binding<F: Fragment> {
+    fn contribute(&self) -> F;
 }
 
-pub struct Bound;
-impl Binding for Bound {
-    fn contribute(&self, value: &dyn Code) -> Fragment {
-        value.code() // copied across the boundary as a frozen literal
-    }
+pub struct Bound<F> { value: F }
+impl<F: Fragment> Binding<F> for Bound<F> {
+    fn contribute(&self) -> F { self.value.clone() }
 }
 
-pub struct Free;
-impl Binding for Free {
-    fn contribute(&self, _value: &dyn Code) -> Fragment {
-        // a fresh, open parameter slot in the emitted program's own scope
-        todo!()
-    }
+pub struct Free<F> { placeholder: F }
+impl<F: Fragment> Binding<F> for Free<F> {
+    fn contribute(&self) -> F { self.placeholder.clone() }
+}
+```
+
+Both are self-contained, constructed with whatever they need up front,
+rather than mirroring `Locality::contribute(&self, dependency: &F)`'s
+shape — `boundary()` always hands `Locality` a real dependency to decide
+about, but `Free` has nothing to be handed when `Source` answered `None`;
+passing a parameter there would mean passing a dummy.
+
+`Source` answers whether a value is available for a slot at all,
+decoupled entirely from `Fragment`/`Code` — it hands back an `Args`, a raw
+value with no code representation, and whoever wants a `Fragment` reaches
+for whatever `Code` impl that raw value's own type already has:
+
+```rust
+pub trait Args {
+    type Value;
+    fn value(&self) -> Self::Value;
 }
 
 pub trait Source {
-    /// A concrete value for this slot, if the emission-time scope has one
-    /// available. None means: no value here, this slot stays Free.
-    fn value_for(&self, slot: SlotId) -> Option<Fragment>;
+    type Args: Args;
+
+    /// A non-consuming peek — safe to call more than once with the same
+    /// answer.
+    fn value_for(&self, slot: &str) -> Option<Self::Args>;
+
+    /// Permitted to consume or mutate whatever backs it. Defaults to a
+    /// non-consuming peek — most `Source`s (a fixed, already-captured
+    /// record) have nothing to drain and never override this.
+    fn value_mut_for(&mut self, slot: &str) -> Option<Self::Args> {
+        self.value_for(slot)
+    }
 }
 ```
 
+An earlier pass tried to put the stable/mutating distinction on the
+*value* `Source` hands back (an `ArgsMut` trait alongside `Args`) instead
+of on `Source` itself — but a value with no way back to its `Source` has
+nothing to mutate. Putting `value_mut_for` on `Source`, taking `&mut
+self`, is what makes real draining mechanically possible: a queue-shaped
+`Source` (`AddArgs` in the calculator example, holding user-submitted
+values one slot's queue at a time) can actually pop from its own state
+inside `value_mut_for`, something no amount of cleverness on the returned
+value alone could do.
+
 `Selection` and `Source` are independent, composable pieces — a Lego kit,
-not a fixed set of "modes." Neither knows the other exists. Emission takes
-both:
-
-```rust
-fn scope_with(&self, selection: &dyn Selection, source: &dyn Source) -> Fragment
-```
-
-The two motivating requests are just two different pairs of the same two
-parts, not two special cases requiring their own machinery:
+not a fixed set of "modes." Neither knows the other exists, and neither is
+routed through the other's entry point:
 
 - *"The keys the user pressed this session, hardcoded forever"* —
-  `Selection` = the path this session actually walked; `Source` = that
-  session's (or a replayed file's) recorded values, answering `Some` for
-  everything.
+  `Selection` = the path this session actually walked; `Source` =
+  `AddArgs` populated with that session's actual values, drained via
+  `Add::code_with` as each operation's code is emitted.
 - *"A calculator with just `+ - * /`"* — `Selection` = an arithmetic
-  capability filter; `Source` = a trivial source that always answers
-  `None`, leaving every value free.
+  capability filter (`PlusMinusOnly`); `Source` = an empty `AddArgs`,
+  answering `None` for everything and leaving every value free — no
+  separate always-free type needed.
 
 Any other pair — a capability filter with some values pre-bound and others
 left open, say — is a new, valid point on the spectrum nobody had to
 explicitly design for, which is the same payoff `Locality`'s extensibility
-already demonstrated once with `Omit`.
-
-Not yet resolved: exactly how `scope_with()` composes with the simpler,
-parameterless `scope()` default from `Scope` — whether `scope()` becomes a
-convenience wrapper over `scope_with()` with a trivial always-include
-`Selection` and always-bind `Source`, or whether they stay genuinely
-separate entry points. Left for Phase 4, alongside `Selection`/`Source`'s
-own implementation.
+already demonstrated once with `Omit`. `Add::code_with` demonstrates this
+concretely: both slots bound is direct substitution (`3 + 4`), both free
+matches `code()` exactly (`|a: i32, b: i32| a + b`), and a mix partially
+applies (`|b: i32| 3 + b`) — a spectrum, not a binary switch, at the value
+level in a way `Selection` alone (whole-entry, not per-value) can't reach.
 
 ## Fragment: `syn`-typed, `petgraph`-backed, not raw `TokenStream`
 
@@ -728,16 +766,78 @@ end to end, by hand, on a type with no `amenable` bound at all, before
 - [ ] Model a calculator by hand and confirm that isolating one calculation
   is exactly extracting the subgraph along one walked path — no separate
   tracking mechanism required.
-- [ ] Define `Selection` and `Source`, and `scope_with(selection, source)`.
-- [ ] Implement `Bound`/`Free` as `Binding` and confirm the round-trip
-  obligation holds for both — a `Bound` slot round-trips to the same
-  value; a `Free` slot round-trips to a program that accepts a new one.
-- [ ] Reproduce both motivating configurations on the calculator example —
+- [x] Define `Selection` and `scope_with(selection)`. `Selection<F:
+  Fragment> { fn includes(&self, item: &F) -> bool }` is a filter layered
+  on top of `Locality`, not a replacement for it, confirmed by
+  `scope_with`'s implementation: an entry survives only if `selection`
+  includes it *and* its assigned `Locality::contribute` still answers
+  `Some`. Hand-implemented for both `Transition` (`scope_test.rs`,
+  `OnlyGreen`) and `Calculator` (`calculator_test.rs`, `PlusMinusOnly`,
+  replacing the earlier hardcoded `include_advanced` field — "a
+  calculator with just `+` and `-`" is now an external, pluggable policy
+  rather than a struct field). Implementing this surfaced and fixed a
+  latent bug in `Transition::scope()`: it reused `code()`'s output as its
+  tail expression, which always built the full `(from, to)` tuple
+  regardless of `Locality`, the same shaving bug `Calculator::scope()`
+  had before its own fix — never caught because no prior test exercised
+  exclusion through `Transition::scope()` itself.
+- [x] Decide how `scope()` and `scope_with()` relate: siblings, not a
+  wrapper — `scope_with` is a second required `Scope` method with no
+  default body, for the same reason `scope()` has none (`Fragment`
+  carries no composition capability to build a generic default from).
+  Each implementor hand-writes both for now, pending Phase 5.
+- [x] Define `Source` and implement `Bound`/`Free` as `Binding`, and
+  confirm the round-trip obligation holds for both —
+  `bound_binding_round_trips_to_the_same_value` and
+  `free_binding_round_trips_to_an_accepting_placeholder` in
+  `calculator_test.rs`. The design changed shape twice on the way here,
+  both times toward less machinery, not more:
+  - No separate `Calculation` example type was needed. A single resolved
+    calculation and one entry drained from a queue-shaped `Source` are
+    the same data — inventing a bespoke type to hold it would have
+    duplicated what the `Source` already represents.
+  - `Source` ended up fully decoupled from `Fragment`/`Code`: it hands
+    back an `Args` (`{ type Value; fn value(&self) -> Self::Value; }`),
+    a raw value with no code representation at all. Turning that into a
+    `Fragment` is left to whatever `Code` impl the raw value's own type
+    already has (`i32: Code`, unchanged). `SlotId` is a plain `&str`,
+    matching `Extent::anchor`'s own naming convention.
+  - `Binding`'s stable/mutating split moved off the `Args` side (no
+    `ArgsMut` trait) and onto `Source` itself: `value_for(&self, ..)` is
+    a non-consuming peek, `value_mut_for(&mut self, ..)` is permitted to
+    consume/mutate, defaulting to `value_for` so read-only `Source`s
+    never need to override it. This is what makes real draining
+    mechanically possible at all — the earlier sketch tried to put
+    mutation on the *returned* value without `Source` itself ever taking
+    `&mut self`, which had no way to reach back into a `Source`'s own
+    state.
+  - `Bound<F>`/`Free<F>` ended up self-contained
+    (`fn contribute(&self) -> F`, no argument), not mirroring
+    `Locality::contribute(&self, dependency: &F)`'s shape — `boundary()`
+    always hands `Locality` a real dependency to decide about, but
+    `Free` has no "value from `Source`" to be handed when `Source`
+    answered `None`, so keeping the parameter would have meant passing a
+    dummy.
+  - `Add::code_with(&self, source: &mut dyn Source<Args = IntArg>) -> Ir`
+    demonstrates all three renderings on one operation, not just a bound/
+    free toggle: both slots bound is direct substitution (`3 + 4`), both
+    free matches `code()` exactly (`|a: i32, b: i32| a + b`), and a mix
+    partially applies (`|b: i32| 3 + b`) — a real illustration of
+    "shifting scope" as a spectrum at the value level, something
+    `Selection` alone (whole-entry, not per-value) can't produce.
+  - `AddArgs` is the concrete queue-shaped `Source`
+    (`add_code_with_drains_the_queue` confirms `value_mut_for` actually
+    pops), doubling as "always free" when empty — no separate
+    `AlwaysFree` unit struct was needed either.
+- [x] Reproduce both motivating configurations on the calculator example —
   a frozen replay of one session (`Selection` = the walked path, `Source`
   = that session's values) and a general `+ - * /` calculator (`Selection`
   = an arithmetic filter, `Source` = always `None`) — from the same two
-  composable pieces, with no mode-specific code written for either.
-- [ ] Decide how `scope()` and `scope_with()` relate.
+  composable pieces, with no mode-specific code written for either. The
+  `Selection` half (general calculator) is `PlusMinusOnly`; the
+  session-replay half is `AddArgs` populated with one session's actual
+  values, drained via `Add::code_with`. Both are ordinary implementors of
+  the same two traits, not two hand-written modes.
 - [x] Define `Extent`, hand-implement it for the calculator example
   (`anchor()` matching on `"divide"`/`"multiply"`/`"add"`/`"subtract"`, by
   hand, no derive/`inventory` yet), and confirm each name resolves to the
@@ -863,15 +963,6 @@ repeats the mistake that motivated this crate's own existence.
 - Should the derive macro's name mirror `Code` (or `Scope`), or diverge
   entirely, the way `#[derive(Elicit)]` diverges from any single trait name
   in `elicitation`?
-- How does `scope_with(selection, source)` relate to `scope()` — a
-  convenience wrapper with trivial always-include/always-bind defaults, or
-  a genuinely separate entry point?
-- What is `SlotId` (or whatever identifies a value for `Source::value_for`)
-  concretely — a position in a captured call's argument list, something
-  derived from the `Fragment` graph itself, or something else?
-- Does `Selection` need the same `dyn`-dispatch treatment `Locality` does,
-  for the same reason (heterogeneous policies), or can it stay a single
-  concrete type per `scope_with()` call?
 - What attribute grammar does the derive use to mark a method as an
   `Extent` unit — a bare `#[extent]`, something carrying a name/config
   like `#[instrument]` does, or something else?
