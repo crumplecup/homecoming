@@ -85,6 +85,15 @@ pub fn binary_expr(left: syn::Expr, op: syn::BinOp, right: syn::Expr) -> syn::Ex
     })
 }
 
+/// An array expression, `[elems...]`.
+pub fn array_expr(elems: Vec<syn::Expr>) -> syn::Expr {
+    syn::Expr::Array(syn::ExprArray {
+        attrs: Vec::new(),
+        bracket_token: Default::default(),
+        elems: elems.into_iter().collect(),
+    })
+}
+
 /// A tuple expression, `(elems...)`.
 pub fn tuple_expr(elems: Vec<syn::Expr>) -> syn::Expr {
     syn::Expr::Tuple(syn::ExprTuple {

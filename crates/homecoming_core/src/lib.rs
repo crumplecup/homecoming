@@ -60,8 +60,8 @@ mod source;
 pub use args::Args;
 pub use binding::{Binding, Bound, Free};
 pub use build::{
-    binary_expr, block_expr, call_expr, closure_expr, ident, ident_pat, let_stmt, match_arm,
-    match_expr, method_call_expr, path, path_expr, struct_expr, tuple_expr, tuple_pat,
+    array_expr, binary_expr, block_expr, call_expr, closure_expr, ident, ident_pat, let_stmt,
+    match_arm, match_expr, method_call_expr, path, path_expr, struct_expr, tuple_expr, tuple_pat,
     tuple_struct_pat, type_path, typed_pat, unwrap_infallible_expr, wildcard_pat,
 };
 pub use code::Code;
