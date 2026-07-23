@@ -229,6 +229,46 @@ fn array_code_reflects_actual_elements_not_defaults() {
 }
 
 #[test]
+fn vec_code_round_trips_through_tokens() -> Result<(), syn::Error> {
+    let values = vec![1i32, 2, 3];
+    let fragment = values.code();
+    let tokens = fragment.to_token_stream();
+    let reparsed: syn::Expr = syn::parse2(tokens.clone())?;
+    assert_eq!(fragment.expr(), &reparsed);
+
+    let rendered = tokens.to_string();
+    assert!(rendered.contains("Vec"), "rendered: {rendered}");
+    assert!(rendered.contains("from"), "rendered: {rendered}");
+    assert!(rendered.contains("1i32"), "rendered: {rendered}");
+    assert!(rendered.contains("2i32"), "rendered: {rendered}");
+    assert!(rendered.contains("3i32"), "rendered: {rendered}");
+    Ok(())
+}
+
+#[test]
+fn vec_code_handles_the_empty_case() -> Result<(), syn::Error> {
+    // No elements is not a special case that needs its own branch --
+    // Vec::from([]) is honest, valid code for an empty Vec.
+    let values: Vec<i32> = vec![];
+    let fragment = values.code();
+    let tokens = fragment.to_token_stream();
+    let reparsed: syn::Expr = syn::parse2(tokens)?;
+    assert_eq!(fragment.expr(), &reparsed);
+    Ok(())
+}
+
+#[test]
+fn vec_code_reflects_actual_elements_not_defaults() {
+    let a = vec![1i32, 2, 3];
+    let b = vec![9i32, 9, 9];
+    assert_ne!(a.code().expr(), b.code().expr());
+
+    // Different lengths must never accidentally emit the same code either.
+    let c = vec![1i32, 2];
+    assert_ne!(a.code().expr(), c.code().expr());
+}
+
+#[test]
 fn fabricated_fragment_fails_the_round_trip() -> Result<(), syn::Error> {
     // A default()-fallback style failure: claim to capture 42 but actually
     // emit 0. The round-trip check must be able to catch this mechanically.

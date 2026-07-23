@@ -189,6 +189,26 @@ where
     }
 }
 
+impl<T> Code for Vec<T>
+where
+    T: Code<Fragment = Ir>,
+{
+    type Fragment = Ir;
+
+    fn code(&self) -> Ir {
+        // `Vec::from([elems...])`, not the `vec![...]` macro: syn
+        // represents a macro invocation as an opaque token stream
+        // (`Expr::Macro`), not a typed AST -- reconstructing one honestly
+        // would mean hand-assembling raw tokens instead of reusing
+        // `call_expr`/`array_expr`. `Vec::from([...])` says the same
+        // thing with fully typed nodes this crate already builds
+        // everywhere else.
+        let elems = self.iter().map(|item| item.code().expr().clone()).collect();
+        let expr = call_expr(path_expr(&["Vec", "from"]), vec![array_expr(elems)]);
+        Ir::leaf(expr)
+    }
+}
+
 macro_rules! impl_code_tuple {
     ($(($member:ident, $index:tt)),+) => {
         impl<$($member),+> Code for ($($member,)+)

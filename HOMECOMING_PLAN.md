@@ -861,11 +861,22 @@ end to end, by hand, on a type with no `amenable` bound at all, before
 
 ### Phase 5: Composition
 
-- [ ] Implement `Code for Vec<T>` (or an equivalent first composite) and
-  let its actual composition needs settle the lateralizing-trait arity and
-  node-shape-count questions empirically.
-- [ ] Name and implement the lateralizing composition traits that fall out
-  of that exercise.
+- [x] Implement `Code for Vec<T>`. This did *not* turn out to force the
+  lateralizing-trait questions the way this checklist item originally
+  expected — `impl<T: Code<Fragment = Ir>> Code for Vec<T>` is exactly as
+  mechanical as `[T; N]`/tuples/`Option<T>` were: `Vec::from([elem0,
+  elem1, ...])`, reusing `call_expr`/`array_expr`, no new builder, no
+  `Scope`, no runtime choice of shape involved at all, since a `Vec<T>`
+  value only ever has the one shape its own type dictates. The two
+  questions this checklist item conflated turned out to be genuinely
+  separate: "capture a `Vec<T>` *value's* code" (solved, mechanical) is
+  not the same problem as "let an agent choose, at runtime, how to
+  combine a pile of already-captured fragments not tied to any one Rust
+  type" (still fully open — see "Lateralizing composition traits" above).
+- [ ] Name and implement the lateralizing composition traits. Still needs
+  its own forcing case — something that actually needs an agent to choose
+  a composition shape at runtime over fragments with no single owning
+  Rust type, which `Vec<T>` never was.
 
 ### Phase 6: `homecoming_amenable` — proof-preserving shaving
 
